@@ -1,0 +1,3 @@
+[submodule "wz_temp"]
+	path = wz_temp
+	url = https://github.com/spd789562/wz-reader-rs.git

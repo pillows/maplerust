@@ -1,0 +1,10 @@
+[package]
+name = "rust-maple"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+macroquad = "0.4"
+memmap2 = "0.9"
+wz_reader = { path = "./wz_temp", default-features = false }
+image = { version = "0.25", default-features = false }

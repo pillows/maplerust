@@ -1,0 +1,28 @@
+# Build artifacts
+/target/
+*.wasm
+dump_wz_structure
+
+# Rust
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Downloaded WZ files
+*.img
+
+# Generated structure files
+*_structure.txt
+
+# Logs
+*.log
