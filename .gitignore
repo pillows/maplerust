@@ -26,3 +26,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+img_export/
+wz_temp.zip

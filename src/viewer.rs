@@ -53,6 +53,18 @@ impl eframe::App for WzViewerApp {
                     }
                 }
                 
+                if ui.button("Export All PNGs").clicked() {
+                    if let Some(root) = &self.root_node {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_directory(std::env::current_dir().unwrap_or_default())
+                            .pick_folder()
+                        {
+                            let root_clone = Arc::clone(root);
+                            self.export_all_pngs(&root_clone, &path);
+                        }
+                    }
+                }
+                
                 if let Some(file) = &self.current_file {
                     ui.label(format!("File: {}", file.display()));
                 }
@@ -621,6 +633,60 @@ impl WzViewerApp {
         
         if let Err(e) = fs::write(output_path, log_output) {
             eprintln!("Failed to write export file: {}", e);
+        }
+    }
+    
+    fn export_all_pngs(&mut self, root: &WzNodeArc, output_dir: &PathBuf) {
+        // Create output directory if it doesn't exist
+        if let Err(e) = fs::create_dir_all(output_dir) {
+            eprintln!("Failed to create output directory: {}", e);
+            self.error_message = Some(format!("Failed to create output directory: {}", e));
+            return;
+        }
+        
+        let mut png_count = 0;
+        let mut error_count = 0;
+        
+        walk_node(root, true, &mut |n: &WzNodeArc| {
+            let node_read = n.read().unwrap();
+            
+            // Check if this node is a PNG
+            if node_read.try_as_png().is_some() {
+                // Get the full path and create a safe filename
+                let full_path = node_read.get_full_path();
+                // Replace forward slashes with dashes to create a flat filename
+                let safe_name = full_path.replace("/", "-");
+                let output_path = output_dir.join(format!("{}.png", safe_name));
+                
+                // Extract and save the PNG
+                match get_image(n) {
+                    Ok(dynamic_img) => {
+                        match dynamic_img.save(&output_path) {
+                            Ok(_) => {
+                                png_count += 1;
+                                if png_count % 100 == 0 {
+                                    println!("Exported {} PNGs so far...", png_count);
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                eprintln!("Failed to save PNG to {}: {}", output_path.display(), e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        eprintln!("Failed to extract PNG from {}: {:?}", full_path, e);
+                    }
+                }
+            }
+        });
+        
+        println!("Export complete: {} PNGs exported, {} errors", png_count, error_count);
+        if error_count > 0 {
+            self.error_message = Some(format!("Export complete: {} PNGs exported, {} errors occurred. Check console for details.", png_count, error_count));
+        } else {
+            self.error_message = Some(format!("Successfully exported {} PNGs to {}", png_count, output_dir.display()));
         }
     }
 }

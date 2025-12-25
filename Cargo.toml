@@ -7,4 +7,17 @@ edition = "2021"
 macroquad = "0.4"
 memmap2 = "0.9"
 wz_reader = { path = "./wz_temp", default-features = false }
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# GUI viewer dependencies
+eframe = "0.27"
+egui = "0.27"
+rfd = "0.14"
+
+[[bin]]
+name = "wz-viewer"
+path = "src/viewer.rs"
+
+[[bin]]
+name = "test-logo"
+path = "src/test_logo.rs"
