@@ -5,7 +5,7 @@ use std::sync::Arc;
 use wz_reader::property::get_image;
 use wz_reader::util::walk_node;
 use wz_reader::version::guess_iv_from_wz_img;
-use wz_reader::{WzImage, WzNode, WzNodeArc, WzNodeCast, WzNodeName, WzObjectType, WzReader};
+use wz_reader::{WzFile, WzImage, WzNode, WzNodeArc, WzNodeCast, WzNodeName, WzObjectType, WzReader};
 
 #[derive(Default)]
 struct WzViewerApp {
@@ -25,7 +25,8 @@ struct WzViewerApp {
 
 impl eframe::App for WzViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // Top panel for menu and header
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.heading("WZ/IMG File Viewer");
             
             // Top menu bar
@@ -63,14 +64,19 @@ impl eframe::App for WzViewerApp {
             if let Some(error) = &self.error_message {
                 ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
             }
-            
-            // Main content area
-            ui.horizontal(|ui| {
-                // Left panel: Tree view
+        });
+        
+        // Left side panel for tree view
+        egui::SidePanel::left("tree_panel")
+            .resizable(true)
+            .default_width(400.0)
+            .min_width(300.0)
+            .max_width(600.0)
+            .show(ctx, |ui| {
+                ui.heading("Structure");
                 egui::ScrollArea::vertical()
-                    .max_width(400.0)
+                    .id_source("tree_scroll")
                     .show(ui, |ui| {
-                        ui.heading("Structure");
                         if let Some(root) = self.root_node.as_ref() {
                             // Clone the Arc to avoid borrow checker issues
                             let root_clone = Arc::clone(root);
@@ -80,11 +86,12 @@ impl eframe::App for WzViewerApp {
                             ui.label("No file loaded. Click 'Open File' to load an IMG file.");
                         }
                     });
-                
-                ui.separator();
-                
-                // Right panel: Details/Image view
+            });
+
+        // Central panel for details/image view
+        egui::CentralPanel::default().show(ctx, |ui| {
                 egui::ScrollArea::both()
+                    .id_source("details_scroll")
                     .show(ui, |ui| {
                         ui.heading("Details");
                         
@@ -237,6 +244,8 @@ impl eframe::App for WzViewerApp {
                                             
                                             // Display image if loaded
                                             if let Some(tex) = &self.current_image {
+                                                ui.separator();
+
                                                 // Get size from PNG data if available
                                                 let (width, height) = if let WzObjectType::Property(
                                                     wz_reader::property::WzSubProperty::PNG(png_data)
@@ -245,20 +254,28 @@ impl eframe::App for WzViewerApp {
                                                 } else {
                                                     (100, 100) // fallback
                                                 };
-                                                
-                                                let size = [width, height];
-                                                let max_size = 512.0;
-                                                let scale = (max_size / size[0] as f32)
-                                                    .min(max_size / size[1] as f32)
-                                                    .min(1.0);
-                                                
-                                                ui.image((
-                                                    tex.id(),
-                                                    egui::vec2(
-                                                        size[0] as f32 * scale,
-                                                        size[1] as f32 * scale,
-                                                    ),
-                                                ));
+
+                                                // Use fixed maximum dimensions for image display
+                                                // This prevents the image from expanding beyond reasonable bounds
+                                                const MAX_IMAGE_WIDTH: f32 = 600.0;
+                                                const MAX_IMAGE_HEIGHT: f32 = 500.0;
+
+                                                // Calculate scale to fit within max dimensions
+                                                let scale = (MAX_IMAGE_WIDTH / width as f32)
+                                                    .min(MAX_IMAGE_HEIGHT / height as f32)
+                                                    .min(1.0); // Don't scale up, only down
+
+                                                let display_size = egui::vec2(
+                                                    width as f32 * scale,
+                                                    height as f32 * scale,
+                                                );
+
+                                                ui.label(format!("Original: {}x{}", width, height));
+                                                ui.label(format!("Display: {:.0}x{:.0} (scale: {:.2})",
+                                                    display_size.x, display_size.y, scale));
+
+                                                ui.add_space(5.0);
+                                                ui.image((tex.id(), display_size));
                                             }
                                         } else {
                                             // Show other node information
@@ -336,7 +353,6 @@ impl eframe::App for WzViewerApp {
                             ui.label("Select a node from the tree to view details.");
                         }
                     });
-            });
         });
     }
 }
@@ -355,42 +371,90 @@ impl WzViewerApp {
         self.current_image = None;
         self.image_path = None;
         
-        match fs::read(path) {
-            Ok(bytes) => {
-                // Guess IV
-                let wz_iv = match guess_iv_from_wz_img(&bytes) {
-                    Some(iv) => iv,
-                    None => {
-                        self.error_message = Some("Unable to guess WZ version/IV from file".to_string());
-                        return;
+        // Determine file type by extension
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        
+        let is_wz_file = extension == "wz";
+        let is_img_file = extension == "img";
+        
+        if !is_wz_file && !is_img_file {
+            self.error_message = Some("File must be a .wz or .img file".to_string());
+            return;
+        }
+        
+        // Get filename
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        
+        let node_result = if is_wz_file {
+            // Load as WZ file
+            match WzFile::from_file(path, None, None, None) {
+                Ok(wz_file) => {
+                    // Create root node from WZ file
+                    let node: WzNodeArc = WzNode::new(&name.into(), wz_file, None).into();
+                    
+                    // Parse the root node
+                    let parse_result = {
+                        let mut node_write = node.write().unwrap();
+                        node_write.parse(&node)
+                    };
+                    
+                    match parse_result {
+                        Ok(_) => Ok(node),
+                        Err(e) => Err(format!("Failed to parse WZ file: {:?}", e)),
                     }
-                };
-                
-                // Create reader
-                let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
-                
-                // Get filename
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown");
-                
-                // Create WZ image
-                let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
-                
-                // Create root node
-                let node: WzNodeArc = WzNode::new(&name.into(), wz_image, None).into();
-                
-                // Parse the root node
-                if let Err(e) = node.write().unwrap().parse(&node) {
-                    self.error_message = Some(format!("Failed to parse WZ file: {:?}", e));
-                    return;
                 }
-                
+                Err(e) => Err(format!("Failed to load WZ file: {:?}", e)),
+            }
+        } else {
+            // Load as IMG file (existing logic)
+            match fs::read(path) {
+                Ok(bytes) => {
+                    // Guess IV
+                    let wz_iv = match guess_iv_from_wz_img(&bytes) {
+                        Some(iv) => iv,
+                        None => {
+                            self.error_message = Some("Unable to guess WZ version/IV from IMG file".to_string());
+                            return;
+                        }
+                    };
+                    
+                    // Create reader
+                    let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+                    
+                    // Create WZ image
+                    let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
+                    
+                    // Create root node
+                    let node: WzNodeArc = WzNode::new(&name.into(), wz_image, None).into();
+                    
+                    // Parse the root node
+                    let parse_result = {
+                        let mut node_write = node.write().unwrap();
+                        node_write.parse(&node)
+                    };
+                    
+                    match parse_result {
+                        Ok(_) => Ok(node),
+                        Err(e) => Err(format!("Failed to parse IMG file: {:?}", e)),
+                    }
+                }
+                Err(e) => Err(format!("Failed to read file: {}", e)),
+            }
+        };
+        
+        match node_result {
+            Ok(node) => {
                 self.root_node = Some(node);
             }
             Err(e) => {
-                self.error_message = Some(format!("Failed to read file: {}", e));
+                self.error_message = Some(e);
             }
         }
     }

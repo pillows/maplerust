@@ -6,8 +6,8 @@ set -e  # Exit on error
 
 echo "🔨 Building rust-maple for WASM..."
 
-# Build the WASM binary
-cargo build --target wasm32-unknown-unknown --release
+# Build the WASM binary (only the main binary, not wz-viewer which is native-only)
+cargo build --target wasm32-unknown-unknown --release --bin rust-maple
 
 # Copy the WASM file to the project root
 echo "📦 Copying WASM file..."
