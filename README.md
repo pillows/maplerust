@@ -1,65 +1,102 @@
-# WZ Structure Dumper
+# MapleStory WZ Viewer
 
-A standalone tool to dump the hierarchical structure of MapleStory WZ `.img` files to text files.
+A WASM-based MapleStory WZ file viewer with animated sprite support, built with Rust and Macroquad.
 
-## Usage
+## Features
 
-### Quick Start
+- 🎮 **WASM Game Engine**: Runs in the browser using Macroquad
+- 🖼️ **WZ File Parsing**: Extracts and displays PNG images from MapleStory `.img` files
+- 🎬 **Animated Sprites**: Automatically discovers and plays all animation frames
+- 💾 **Smart Caching**: Uses IndexedDB to cache downloaded WZ files
+- 🔍 **Structure Dumper**: Standalone CLI tool to inspect WZ file contents
 
-```bash
-# Download a .img file first, then:
-./dump_wz.sh path/to/file.img
+## Quick Start
 
-# Or specify a custom output file:
-./dump_wz.sh path/to/file.img output_structure.txt
-```
-
-### Example
+### Clone the Repository
 
 ```bash
-# If you have Login.img in the current directory:
-./dump_wz.sh Login.img
-
-# This will create: Login_structure.txt
+git clone --recursive git@github.com:pillows/maplerust.git
+cd maplerust
 ```
 
-The script will:
-1. Automatically compile the dumper tool (first run only)
-2. Parse the WZ file structure
-3. Save the complete node hierarchy to a text file
+**Note**: The `--recursive` flag is important to clone the `wz-reader-rs` submodule.
 
-### Output Format
-
-The output file contains all nodes in the WZ file with their types:
-
-```
-=== WZ Structure for Login.img ===
-
-Login.img [Image]
-Login.img/Common [Property]
-Login.img/Common/BtStart [Property]
-Login.img/Common/BtStart/normal [Property]
-Login.img/Common/BtStart/normal/0 [PNG]
-...
+If you already cloned without `--recursive`, run:
+```bash
+git submodule update --init --recursive
 ```
 
-### Node Types
+### Build and Run
 
-- **PNG**: Image data
-- **Property**: Container node
-- **Int/Short/Long**: Integer values
-- **Float/Double**: Decimal values
-- **String**: Text data
-- **Vector**: 2D coordinates
-- **Sound**: Audio data
-- **UOL**: Link to another node
+1. **Build the WASM game:**
+   ```bash
+   ./build.sh
+   ```
 
-## Building the Game
+2. **Start a local server:**
+   ```bash
+   python3 -m http.server
+   ```
 
-To build the WASM game:
+3. **Open in browser:**
+   Navigate to `http://localhost:8000`
+
+## WZ Structure Dumper
+
+Inspect the contents of any WZ `.img` file:
 
 ```bash
-./build.sh
+./dump_wz.sh path/to/file.img [output.txt]
 ```
 
-Then open `http://localhost:8000` in your browser (requires `python3 -m http.server` running).
+Example:
+```bash
+./dump_wz.sh Logo.img
+# Creates: Logo_structure.txt
+```
+
+## Project Structure
+
+```
+maplerust/
+├── src/
+│   ├── main.rs          # Main game loop and animation logic
+│   └── assets.rs        # WZ file loading and PNG extraction
+├── wz_temp/             # wz-reader-rs submodule (WASM-compatible fork)
+├── build.sh             # WASM build script
+├── dump_wz.sh           # WZ structure dumper script
+├── dump_wz_structure.rs # Structure dumper source
+├── index.html           # Game HTML entry point
+└── mq_js_bundle.js      # Macroquad JavaScript bundle with custom FFI
+
+```
+
+## How It Works
+
+1. **WZ File Loading**: Downloads `.img` files from a URL and caches them in IndexedDB
+2. **Frame Discovery**: Parses the WZ structure to find all animation frames
+3. **PNG Extraction**: Converts WZ PNG data to RGBA8 textures
+4. **Animation**: Cycles through frames at configurable FPS
+
+## Technologies
+
+- **Rust** - Core logic and WZ parsing
+- **Macroquad** - WASM game framework
+- **wz-reader-rs** - MapleStory WZ file parser (modified for WASM)
+- **IndexedDB** - Browser-based asset caching
+
+## Configuration
+
+Edit `src/main.rs` to change:
+- Animation source: `base_url`, `cache_name`, `base_path`
+- Animation speed: `frame_duration` (default: 0.05s = 20 FPS)
+- Display position: `draw_texture(tex, x, y, WHITE)`
+
+## License
+
+This project uses the `wz-reader-rs` library as a submodule. See the submodule's repository for its license.
+
+## Credits
+
+- [wz-reader-rs](https://github.com/spd789562/wz-reader-rs) - WZ file parsing library
+- [Macroquad](https://github.com/not-fl3/macroquad) - WASM game framework
