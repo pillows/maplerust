@@ -27,6 +27,8 @@ struct Button {
     width: f32,
     height: f32,
     state: ButtonState,
+    was_pressed: bool, // Track if button was pressed in previous frame
+    just_clicked: bool, // Set to true when a click is detected, reset after is_clicked() is called
 }
 
 impl Button {
@@ -41,6 +43,8 @@ impl Button {
             width: 0.0,
             height: 0.0,
             state: ButtonState::Normal,
+            was_pressed: false,
+            just_clicked: false,
         }
     }
 
@@ -63,6 +67,20 @@ impl Button {
             return;
         }
 
+        // Reset just_clicked at the start of each frame
+        self.just_clicked = false;
+        
+        // Store previous pressed state BEFORE updating
+        let was_pressed_before = self.was_pressed;
+        
+        // Check if button is currently pressed
+        let currently_pressed = mouse_in_bounds && is_mouse_button_down(MouseButton::Left);
+        
+        // Detect click: was pressed before AND mouse button was just released AND mouse is in bounds
+        if was_pressed_before && is_mouse_button_released(MouseButton::Left) && mouse_in_bounds {
+            self.just_clicked = true;
+        }
+        
         if mouse_in_bounds {
             if is_mouse_button_down(MouseButton::Left) {
                 self.state = ButtonState::Pressed;
@@ -72,10 +90,19 @@ impl Button {
         } else {
             self.state = ButtonState::Normal;
         }
+        
+        // Update was_pressed for next frame
+        self.was_pressed = currently_pressed;
     }
 
-    fn is_clicked(&self) -> bool {
-        self.state == ButtonState::Pressed && is_mouse_button_released(MouseButton::Left)
+    fn is_clicked(&mut self) -> bool {
+        // Return the click state detected in update()
+        let clicked = self.just_clicked;
+        // Reset after reading
+        if clicked {
+            self.just_clicked = false;
+        }
+        clicked
     }
 
     fn draw(&self) {
@@ -182,6 +209,14 @@ pub struct LoginState {
 
     // State
     loaded: bool,
+    
+    // Debug: Fine-tuning mode for positioning input fields
+    debug_mode: bool,
+    username_center_x_ratio: f32,
+    username_center_y_ratio: f32,
+    password_center_x_ratio: f32,
+    password_center_y_ratio: f32,
+    selected_ratio: usize, // 0=username_x, 1=username_y, 2=password_x, 3=password_y
 }
 
 impl LoginState {
@@ -202,6 +237,13 @@ impl LoginState {
             focused_field: FocusedField::None,
             save_id_checked: false,
             loaded: false,
+            // Debug fine-tuning mode - press F1 to toggle
+            debug_mode: false,
+            username_center_x_ratio: 0.0,
+            username_center_y_ratio: 0.0,
+            password_center_x_ratio: 0.0,
+            password_center_y_ratio: 0.0,
+            selected_ratio: 0,
         }
     }
 
@@ -246,7 +288,7 @@ impl LoginState {
         // The root node is "Login.img" so we navigate directly to child nodes
 
         // Load background
-        match load_png_from_node(&root_node, "Common/Banner/backBg") {
+        match load_png_from_node(&root_node, "Title_new/backgrd") {
             Ok(two) => {
                 info!("Background loaded: {}x{}, origin: ({}, {})", two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
                 self.background = Some(two);
@@ -347,26 +389,47 @@ impl LoginState {
         self.quit_button.x = center_x + 150.0;
         self.quit_button.y = center_y + 120.0;
 
-        // Handle mouse clicks on input fields
+        // Handle mouse clicks on input fields (using MapleID and PW textures as input fields)
         let (mouse_x, mouse_y) = mouse_position();
-        let input_x_base = center_x - 50.0;
-        let input_width = 200.0;
-        let input_height = 24.0;
-        let username_anchor_y = center_y - 60.0;
-        let password_anchor_y = center_y - 20.0;
-        let checkbox_anchor_x = input_x_base - 80.0;
-        let checkbox_anchor_y = center_y + 20.0;
+
+        // Calculate input field positions relative to background dimensions (same as in draw())
+        let (bg_x, bg_y, bg_width, bg_height) = if let Some(bg) = &self.background {
+            let bg_width = bg.texture.width();
+            let bg_height = bg.texture.height();
+            let bg_x = (screen_width() - bg_width) / 2.0;
+            let bg_y = (screen_height() - bg_height) / 2.0;
+            (bg_x, bg_y, bg_width, bg_height)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        // Username field position and dimensions (from MapleID texture)
+        // Using same ratios as in draw() function
+        let username_field_x = bg_x + bg_width * self.username_center_x_ratio;
+        let username_field_y = bg_y + bg_height * self.username_center_y_ratio;
+        let username_width = self.maple_id_label.as_ref().map(|t| t.texture.width()).unwrap_or(200.0);
+        let username_height = self.maple_id_label.as_ref().map(|t| t.texture.height()).unwrap_or(30.0);
+
+        // Password field position and dimensions (from PW texture)
+        let password_field_x = bg_x + bg_width * self.password_center_x_ratio;
+        let password_field_y = bg_y + bg_height * self.password_center_y_ratio;
+        let password_width = self.password_label.as_ref().map(|t| t.texture.width()).unwrap_or(200.0);
+        let password_height = self.password_label.as_ref().map(|t| t.texture.height()).unwrap_or(30.0);
+
+        // Checkbox position (relative to background dimensions, same as in draw())
+        let checkbox_anchor_x = bg_x + bg_width * 0.28;
+        let checkbox_anchor_y = bg_y + bg_height * 0.91;
 
         if is_mouse_button_pressed(MouseButton::Left) {
             // Check if clicked on username field
-            if mouse_x >= input_x_base && mouse_x <= input_x_base + input_width
-                && mouse_y >= username_anchor_y && mouse_y <= username_anchor_y + input_height
+            if mouse_x >= username_field_x && mouse_x <= username_field_x + username_width
+                && mouse_y >= username_field_y && mouse_y <= username_field_y + username_height
             {
                 self.focused_field = FocusedField::Username;
             }
             // Check if clicked on password field
-            else if mouse_x >= input_x_base && mouse_x <= input_x_base + input_width
-                && mouse_y >= password_anchor_y && mouse_y <= password_anchor_y + input_height
+            else if mouse_x >= password_field_x && mouse_x <= password_field_x + password_width
+                && mouse_y >= password_field_y && mouse_y <= password_field_y + password_height
             {
                 self.focused_field = FocusedField::Password;
             }
@@ -431,6 +494,93 @@ impl LoginState {
             }
         }
 
+        // Debug fine-tuning mode controls
+        if is_key_pressed(KeyCode::F1) {
+            self.debug_mode = !self.debug_mode;
+            info!("Debug fine-tuning mode: {}", if self.debug_mode { "ON" } else { "OFF" });
+        }
+        
+        if self.debug_mode {
+            // Select which ratio to adjust (1-4 keys)
+            if is_key_pressed(KeyCode::Key1) {
+                self.selected_ratio = 0;
+                info!("Selected: Username X ratio");
+            }
+            if is_key_pressed(KeyCode::Key2) {
+                self.selected_ratio = 1;
+                info!("Selected: Username Y ratio");
+            }
+            if is_key_pressed(KeyCode::Key3) {
+                self.selected_ratio = 2;
+                info!("Selected: Password X ratio");
+            }
+            if is_key_pressed(KeyCode::Key4) {
+                self.selected_ratio = 3;
+                info!("Selected: Password Y ratio");
+            }
+            
+            // Adjust selected ratio with arrow keys or WASD
+            let adjust_amount = if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
+                0.001 // Fine adjustment with Shift held
+            } else {
+                0.01 // Normal adjustment
+            };
+            
+            let mut ratio_changed = false;
+            if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
+                match self.selected_ratio {
+                    0 => { self.username_center_x_ratio += adjust_amount; ratio_changed = true; }
+                    1 => { self.username_center_y_ratio += adjust_amount; ratio_changed = true; }
+                    2 => { self.password_center_x_ratio += adjust_amount; ratio_changed = true; }
+                    3 => { self.password_center_y_ratio += adjust_amount; ratio_changed = true; }
+                    _ => {}
+                }
+            }
+            if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+                match self.selected_ratio {
+                    0 => { self.username_center_x_ratio -= adjust_amount; ratio_changed = true; }
+                    1 => { self.username_center_y_ratio -= adjust_amount; ratio_changed = true; }
+                    2 => { self.password_center_x_ratio -= adjust_amount; ratio_changed = true; }
+                    3 => { self.password_center_y_ratio -= adjust_amount; ratio_changed = true; }
+                    _ => {}
+                }
+            }
+            if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
+                match self.selected_ratio {
+                    0 => { self.username_center_x_ratio += adjust_amount; ratio_changed = true; }
+                    1 => { self.username_center_y_ratio += adjust_amount; ratio_changed = true; }
+                    2 => { self.password_center_x_ratio += adjust_amount; ratio_changed = true; }
+                    3 => { self.password_center_y_ratio += adjust_amount; ratio_changed = true; }
+                    _ => {}
+                }
+            }
+            if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+                match self.selected_ratio {
+                    0 => { self.username_center_x_ratio -= adjust_amount; ratio_changed = true; }
+                    1 => { self.username_center_y_ratio -= adjust_amount; ratio_changed = true; }
+                    2 => { self.password_center_x_ratio -= adjust_amount; ratio_changed = true; }
+                    3 => { self.password_center_y_ratio -= adjust_amount; ratio_changed = true; }
+                    _ => {}
+                }
+            }
+            
+            // Clamp ratios to valid range
+            self.username_center_x_ratio = self.username_center_x_ratio.clamp(0.0, 1.0);
+            self.username_center_y_ratio = self.username_center_y_ratio.clamp(0.0, 1.0);
+            self.password_center_x_ratio = self.password_center_x_ratio.clamp(0.0, 1.0);
+            self.password_center_y_ratio = self.password_center_y_ratio.clamp(0.0, 1.0);
+            
+            // Print current values when they change
+            if ratio_changed {
+                println!("Username X: {:.4}, Y: {:.4} | Password X: {:.4}, Y: {:.4}",
+                    self.username_center_x_ratio,
+                    self.username_center_y_ratio,
+                    self.password_center_x_ratio,
+                    self.password_center_y_ratio
+                );
+            }
+        }
+
         // Update button states based on mouse position
         self.login_button.update();
         self.new_button.update();
@@ -438,7 +588,10 @@ impl LoginState {
 
         // Handle button clicks
         if self.login_button.is_clicked() {
-            info!("Login button clicked! Username: {}", self.username);
+            info!("Login button clicked!");
+            info!("Username: {}", self.username);
+            info!("Password: {}", self.password);
+            info!("Save ID checked: {}", self.save_id_checked);
             // TODO: Handle login action
         }
 
@@ -472,91 +625,83 @@ impl LoginState {
         }
 
         // Draw background - centered on screen (if loaded)
-        if let Some(bg) = &self.background {
-            let bg_x = (screen_width() - bg.texture.width()) / 2.0;
-            let bg_y = (screen_height() - bg.texture.height()) / 2.0;
+        let (bg_x, bg_y, bg_width, bg_height) = if let Some(bg) = &self.background {
+            let bg_width = bg.texture.width();
+            let bg_height = bg.texture.height();
+            let bg_x = (screen_width() - bg_width) / 2.0;
+            let bg_y = (screen_height() - bg_height) / 2.0;
             draw_texture(&bg.texture, bg_x, bg_y, WHITE);
+            (bg_x, bg_y, bg_width, bg_height)
         } else {
             // Draw a simple gradient background if no background loaded
             draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::from_rgba(230, 240, 250, 255));
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        // Calculate input field positions relative to background dimensions
+        // Use stored ratios (can be adjusted in debug mode with F1)
+        let username_center_x = bg_x + bg_width * self.username_center_x_ratio;
+        let username_center_y = bg_y + bg_height * self.username_center_y_ratio;
+        let password_center_x = bg_x + bg_width * self.password_center_x_ratio;
+        let password_center_y = bg_y + bg_height * self.password_center_y_ratio;
+
+        // Draw MapleID input field texture
+        // Position it so the texture's origin aligns with the center of the white input box
+        if let Some(field) = &self.maple_id_label {
+            // Calculate where to draw the texture so its origin is at the center position
+            let draw_x = username_center_x - field.origin.x;
+            let draw_y = username_center_y - field.origin.y;
+            draw_texture(&field.texture, draw_x, draw_y, WHITE);
+            
+            // Debug: Draw a small red dot at the center position to help with alignment
+            draw_circle(username_center_x, username_center_y, 3.0, RED);
         }
+        
+        // Store field positions for text rendering (using center as reference)
+        let username_field_x = username_center_x;
+        let username_field_y = username_center_y;
 
-        let center_x = screen_width() / 2.0;
-        let center_y = screen_height() / 2.0;
-
-        // Define anchor positions where we want elements to appear
-        let input_x_base = center_x - 50.0;
-        let input_width = 200.0;
-        let input_height = 24.0;
-
-        // Username row (top) - anchor point for this row
-        let username_anchor_y = center_y - 60.0;
-
-        // Draw MapleID label with proper origin offset
-        if let Some(label) = &self.maple_id_label {
-            // Position label to the left of input field
-            let label_draw_x = input_x_base - label.texture.width() - 10.0 - label.origin.x;
-            // Vertically center the label with the input field
-            let label_visual_y = username_anchor_y + (input_height / 2.0) - (label.texture.height() / 2.0);
-            let label_draw_y = label_visual_y - label.origin.y;
-            draw_texture(&label.texture, label_draw_x, label_draw_y, WHITE);
-        }
-
-        // Username input field
-        let username_focused = self.focused_field == FocusedField::Username;
-        draw_rectangle(input_x_base, username_anchor_y, input_width, input_height, WHITE);
-        draw_rectangle_lines(
-            input_x_base, username_anchor_y, input_width, input_height, 2.0,
-            if username_focused { Color::from_rgba(100, 150, 255, 255) } else { Color::from_rgba(100, 100, 100, 255) }
-        );
-
-        // Draw username text
+        // Overlay username text on top of MapleID texture
         draw_text(
             &self.username,
-            input_x_base + 5.0,
-            username_anchor_y + 17.0,
+            username_field_x + 5.0,
+            username_field_y + 16.0,
             16.0,
             BLACK,
         );
 
-        // Password row (bottom) - anchor point for this row
-        let password_anchor_y = center_y - 20.0;
-
-        // Draw Password label with proper origin offset
-        if let Some(label) = &self.password_label {
-            // Position label to the left of input field
-            let label_draw_x = input_x_base - label.texture.width() - 10.0 - label.origin.x;
-            // Vertically center the label with the input field
-            let label_visual_y = password_anchor_y + (input_height / 2.0) - (label.texture.height() / 2.0);
-            let label_draw_y = label_visual_y - label.origin.y;
-            draw_texture(&label.texture, label_draw_x, label_draw_y, WHITE);
+        // Draw PW input field texture
+        if let Some(field) = &self.password_label {
+            // Position the texture so its origin is at the center of the white input box
+            let draw_x = password_center_x - field.origin.x;
+            let draw_y = password_center_y - field.origin.y;
+            draw_texture(&field.texture, draw_x, draw_y, WHITE);
+            
+            // Debug: Draw a small red dot at the center position to help with alignment
+            draw_circle(password_center_x, password_center_y, 3.0, RED);
         }
+        
+        // Store field positions for text rendering (using center as reference)
+        let password_field_x = password_center_x;
+        let password_field_y = password_center_y;
 
-        // Password input field
-        let password_focused = self.focused_field == FocusedField::Password;
-        draw_rectangle(input_x_base, password_anchor_y, input_width, input_height, WHITE);
-        draw_rectangle_lines(
-            input_x_base, password_anchor_y, input_width, input_height, 2.0,
-            if password_focused { Color::from_rgba(100, 150, 255, 255) } else { Color::from_rgba(100, 100, 100, 255) }
-        );
-
-        // Draw password text (masked with asterisks)
+        // Overlay password text (masked) on top of PW texture
         let password_masked: String = self.password.chars().map(|_| '*').collect();
         draw_text(
             &password_masked,
-            input_x_base + 5.0,
-            password_anchor_y + 17.0,
+            password_field_x + 5.0,
+            password_field_y + 16.0,
             16.0,
             BLACK,
         );
 
-        // Draw "Save ID" checkbox and label
-        let checkbox_anchor_x = input_x_base - 80.0;
-        let checkbox_anchor_y = center_y + 20.0;
+        // Draw "Save ID" checkbox (if available in assets)
+        // Position checkbox relative to background dimensions
+        let checkbox_anchor_x = bg_x + bg_width * 0.28;
+        let checkbox_anchor_y = bg_y + bg_height * 0.91;
 
         if let (Some(unchecked), Some(checked)) = (&self.checkbox_unchecked, &self.checkbox_checked) {
             let checkbox_tex = if self.save_id_checked { checked } else { unchecked };
-            // Apply origin offset for checkbox too
             draw_texture(
                 &checkbox_tex.texture,
                 checkbox_anchor_x - checkbox_tex.origin.x,
@@ -564,14 +709,6 @@ impl LoginState {
                 WHITE
             );
         }
-
-        draw_text(
-            "Save ID",
-            checkbox_anchor_x + 25.0,
-            checkbox_anchor_y + 15.0,
-            18.0,
-            Color::from_rgba(80, 80, 80, 255),
-        );
 
         // Draw buttons
         self.login_button.draw();
@@ -593,6 +730,84 @@ impl LoginState {
             16.0,
             DARKGRAY,
         );
+        
+        // Draw debug fine-tuning info if enabled
+        if self.debug_mode {
+            let y_offset = 60.0;
+            let line_height = 20.0;
+            
+            draw_text(
+                "=== FINE-TUNING MODE (F1 to toggle) ===",
+                10.0,
+                y_offset,
+                16.0,
+                YELLOW,
+            );
+            
+            draw_text(
+                "1-4: Select ratio | Arrow/WASD: Adjust | Shift: Fine",
+                10.0,
+                y_offset + line_height,
+                14.0,
+                LIGHTGRAY,
+            );
+            
+            let ratio_names = ["Username X", "Username Y", "Password X", "Password Y"];
+            let ratios = [
+                self.username_center_x_ratio,
+                self.username_center_y_ratio,
+                self.password_center_x_ratio,
+                self.password_center_y_ratio,
+            ];
+            
+            for i in 0..4 {
+                let color = if i == self.selected_ratio { GREEN } else { WHITE };
+                let marker = if i == self.selected_ratio { ">>> " } else { "    " };
+                draw_text(
+                    &format!("{}{}: {:.4}", marker, ratio_names[i], ratios[i]),
+                    10.0,
+                    y_offset + line_height * 2.0 + (i as f32 * line_height),
+                    14.0,
+                    color,
+                );
+            }
+            
+            draw_text(
+                "Copy these values to code:",
+                10.0,
+                y_offset + line_height * 6.0,
+                14.0,
+                LIGHTGRAY,
+            );
+            draw_text(
+                &format!("username_center_x_ratio: {:.4}", self.username_center_x_ratio),
+                10.0,
+                y_offset + line_height * 7.0,
+                12.0,
+                Color::from_rgba(0, 255, 255, 255), // Cyan
+            );
+            draw_text(
+                &format!("username_center_y_ratio: {:.4}", self.username_center_y_ratio),
+                10.0,
+                y_offset + line_height * 8.0,
+                12.0,
+                Color::from_rgba(0, 255, 255, 255), // Cyan
+            );
+            draw_text(
+                &format!("password_center_x_ratio: {:.4}", self.password_center_x_ratio),
+                10.0,
+                y_offset + line_height * 9.0,
+                12.0,
+                Color::from_rgba(0, 255, 255, 255), // Cyan
+            );
+            draw_text(
+                &format!("password_center_y_ratio: {:.4}", self.password_center_y_ratio),
+                10.0,
+                y_offset + line_height * 10.0,
+                12.0,
+                Color::from_rgba(0, 255, 255, 255), // Cyan
+            );
+        }
     }
 }
 
