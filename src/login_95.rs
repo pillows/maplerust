@@ -187,13 +187,6 @@ pub struct LoginState {
     button_offset_y: f32,
 
     loaded: bool,
-
-    // Loading screen assets
-    loading_background: Option<TextureWithOrigin>,
-    loading_circle_frames: Vec<TextureWithOrigin>,
-    showing_loading: bool,
-    loading_animation_time: f32,
-    loading_current_frame: usize,
 }
 
 impl LoginState {
@@ -215,11 +208,6 @@ impl LoginState {
             button_offset_x: 68.0,
             button_offset_y: -51.0,
             loaded: false,
-            loading_background: None,
-            loading_circle_frames: Vec::new(),
-            showing_loading: false,
-            loading_animation_time: 0.0,
-            loading_current_frame: 0,
         }
     }
 
@@ -316,32 +304,6 @@ impl LoginState {
         self.login_button.mouse_over = load_png_from_node(&root_node, "Title/BtLogin/mouseOver/0").ok();
         self.login_button.pressed = load_png_from_node(&root_node, "Title/BtLogin/pressed/0").ok();
 
-        // Load Notice/Loading assets
-        info!("Loading Notice/Loading assets...");
-
-        // Load loading background
-        match load_png_from_node(&root_node, "Notice/Loading/backgrnd") {
-            Ok(two) => {
-                info!("Loading background loaded: {}x{}, origin: ({}, {})",
-                    two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
-                self.loading_background = Some(two);
-            }
-            Err(e) => error!("Failed to load loading background: {}", e),
-        }
-
-        // Load loading circle animation frames (0-15)
-        for i in 0..16 {
-            let path = format!("Notice/Loading/circle/{}", i);
-            match load_png_from_node(&root_node, &path) {
-                Ok(two) => {
-                    info!("Loading circle frame {} loaded: {}x{}, origin: ({}, {})",
-                        i, two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
-                    self.loading_circle_frames.push(two);
-                }
-                Err(e) => error!("Failed to load loading circle frame {}: {}", i, e),
-            }
-        }
-
         // Load background from login.img (Map/Back/login.img)
         info!("Loading background assets...");
         let bg_bytes = match AssetManager::fetch_and_cache(BACKGROUND_URL, BACKGROUND_CACHE_NAME).await {
@@ -388,23 +350,9 @@ impl LoginState {
         info!("Login screen assets loaded successfully");
     }
 
-    pub fn update(&mut self, dt: f32) {
+    pub fn update(&mut self, _dt: f32) {
         if !self.loaded {
             return;
-        }
-
-        // Update loading animation if showing
-        if self.showing_loading {
-            // Animate through circle frames (approximately 12 fps for smooth animation)
-            const FRAME_DURATION: f32 = 1.0 / 12.0;
-            self.loading_animation_time += dt;
-
-            if self.loading_animation_time >= FRAME_DURATION {
-                self.loading_animation_time -= FRAME_DURATION;
-                self.loading_current_frame = (self.loading_current_frame + 1) % self.loading_circle_frames.len();
-            }
-
-            // Don't process login UI interactions while loading, but continue to update UI positions
         }
 
         let center_x = screen_width() / 2.0;
@@ -414,15 +362,8 @@ impl LoginState {
         self.login_button.x = center_x + self.button_offset_x;
         self.login_button.y = center_y + self.button_offset_y;
 
-        // Update button state based on mouse position (only if not showing loading)
-        if !self.showing_loading {
-            self.login_button.update();
-        }
-
-        // Only handle input if not showing loading screen
-        if self.showing_loading {
-            return;
-        }
+        // Update button state based on mouse position
+        self.login_button.update();
 
         // Handle mouse clicks on input fields
         let (mouse_x, mouse_y) = mouse_position();
@@ -519,11 +460,6 @@ impl LoginState {
             info!("Login button clicked!");
             info!("Username: {}", self.username);
             info!("Password: {}", self.password);
-
-            // Show loading screen
-            self.showing_loading = true;
-            self.loading_animation_time = 0.0;
-            self.loading_current_frame = 0;
         }
     }
 
@@ -644,42 +580,6 @@ impl LoginState {
 
         // Draw login button
         self.login_button.draw();
-
-        // Draw loading screen overlay if active (on top of everything)
-        if self.showing_loading {
-            // Draw loading background centered on screen
-            if let Some(bg) = &self.loading_background {
-                // Center the background: if origin is (0,0), use texture center instead
-                let draw_x = if bg.origin.x == 0.0 && bg.origin.y == 0.0 {
-                    center_x - (bg.texture.width() / 2.0)
-                } else {
-                    center_x - bg.origin.x
-                };
-                let draw_y = if bg.origin.x == 0.0 && bg.origin.y == 0.0 {
-                    center_y - (bg.texture.height() / 2.0)
-                } else {
-                    center_y - bg.origin.y
-                };
-                draw_texture(&bg.texture, draw_x, draw_y, WHITE);
-            }
-
-            // Draw current circle animation frame ON TOP of loading background
-            if !self.loading_circle_frames.is_empty() {
-                let frame = &self.loading_circle_frames[self.loading_current_frame];
-                // Center the circle: if origin is (0,0), use texture center instead
-                let draw_x = if frame.origin.x == 0.0 && frame.origin.y == 0.0 {
-                    center_x - (frame.texture.width() / 2.0)
-                } else {
-                    center_x - frame.origin.x
-                };
-                let draw_y = if frame.origin.x == 0.0 && frame.origin.y == 0.0 {
-                    center_y - (frame.texture.height() / 2.0)
-                } else {
-                    center_y - frame.origin.y
-                };
-                draw_texture(&frame.texture, draw_x, draw_y, WHITE);
-            }
-        }
     }
 }
 

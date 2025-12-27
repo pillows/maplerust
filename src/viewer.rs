@@ -64,6 +64,33 @@ impl eframe::App for WzViewerApp {
                         }
                     }
                 }
+
+                if ui.button("Export IMG Files").clicked() {
+                    if let Some(root) = &self.root_node {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_directory(std::env::current_dir().unwrap_or_default())
+                            .pick_folder()
+                        {
+                            let root_clone = Arc::clone(root);
+                            self.export_img_files(&root_clone, &path);
+                        }
+                    }
+                }
+
+                if ui.button("Bulk Export WZ → IMG").clicked() {
+                    if let Some(wz_files) = rfd::FileDialog::new()
+                        .add_filter("WZ files", &["wz"])
+                        .set_directory(std::env::current_dir().unwrap_or_default())
+                        .pick_files()
+                    {
+                        if let Some(output_dir) = rfd::FileDialog::new()
+                            .set_directory(std::env::current_dir().unwrap_or_default())
+                            .pick_folder()
+                        {
+                            self.bulk_export_wz_to_img(&wz_files, &output_dir);
+                        }
+                    }
+                }
                 
                 if let Some(file) = &self.current_file {
                     ui.label(format!("File: {}", file.display()));
@@ -636,6 +663,221 @@ impl WzViewerApp {
         }
     }
     
+    fn bulk_export_wz_to_img(&mut self, wz_files: &[PathBuf], output_dir: &PathBuf) {
+        // Create output directory if it doesn't exist
+        if let Err(e) = fs::create_dir_all(output_dir) {
+            eprintln!("Failed to create output directory: {}", e);
+            self.error_message = Some(format!("Failed to create output directory: {}", e));
+            return;
+        }
+
+        let total_files = wz_files.len();
+        let mut total_img_count = 0;
+        let mut total_error_count = 0;
+
+        println!("Starting bulk export of {} WZ files...", total_files);
+
+        for (idx, wz_path) in wz_files.iter().enumerate() {
+            println!("\n[{}/{}] Processing: {}", idx + 1, total_files, wz_path.display());
+
+            // Get filename
+            let name = wz_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+
+            // Load WZ file
+            let wz_root = match WzFile::from_file(wz_path, None, None, None) {
+                Ok(wz_file) => {
+                    let node: WzNodeArc = WzNode::new(&name.into(), wz_file, None).into();
+
+                    // Parse the root node
+                    let parse_result = {
+                        let mut node_write = node.write().unwrap();
+                        node_write.parse(&node)
+                    };
+
+                    match parse_result {
+                        Ok(_) => node,
+                        Err(e) => {
+                            eprintln!("Failed to parse WZ file {}: {:?}", wz_path.display(), e);
+                            total_error_count += 1;
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to load WZ file {}: {:?}", wz_path.display(), e);
+                    total_error_count += 1;
+                    continue;
+                }
+            };
+
+            // Export IMG files from this WZ file
+            let mut img_count = 0;
+            let mut error_count = 0;
+
+            walk_node(&wz_root, true, &mut |n: &WzNodeArc| {
+                let node_read = n.read().unwrap();
+
+                // Check if this node is an Image type
+                if let WzObjectType::Image(wz_image) = &node_read.object_type {
+                    // Get the full path
+                    let full_path = node_read.get_full_path();
+
+                    // Split path into directory components and filename
+                    let path_parts: Vec<&str> = full_path.split('/').collect();
+
+                    if path_parts.is_empty() {
+                        error_count += 1;
+                        eprintln!("Invalid path: {}", full_path);
+                        return;
+                    }
+
+                    // Create directory structure (all parts except the last one, which is the filename)
+                    let dir_parts = &path_parts[..path_parts.len().saturating_sub(1)];
+                    let filename = path_parts.last().unwrap_or(&"unknown");
+
+                    // Build the directory path
+                    let mut current_dir = output_dir.clone();
+                    for part in dir_parts {
+                        current_dir = current_dir.join(part);
+                    }
+
+                    // Create the directory structure
+                    if let Err(e) = fs::create_dir_all(&current_dir) {
+                        error_count += 1;
+                        eprintln!("Failed to create directory {}: {}", current_dir.display(), e);
+                        return;
+                    }
+
+                    // Build output path (filename already has .img extension)
+                    let output_path = current_dir.join(filename);
+
+                    // Extract IMG file bytes from the reader
+                    let reader_ref = &wz_image.reader;
+                    let offset = wz_image.offset;
+                    let block_size = wz_image.block_size;
+
+                    // Get the bytes from the reader
+                    let bytes = reader_ref.get_slice(offset..offset + block_size);
+
+                    // Write the IMG file
+                    match fs::write(&output_path, bytes) {
+                        Ok(_) => {
+                            img_count += 1;
+                        }
+                        Err(e) => {
+                            error_count += 1;
+                            eprintln!("Failed to write IMG file to {}: {}", output_path.display(), e);
+                        }
+                    }
+                }
+            });
+
+            println!("  → Exported {} IMG files from {} ({} errors)", img_count, name, error_count);
+            total_img_count += img_count;
+            total_error_count += error_count;
+        }
+
+        println!("\n=== Bulk Export Complete ===");
+        println!("Total WZ files processed: {}", total_files);
+        println!("Total IMG files exported: {}", total_img_count);
+        println!("Total errors: {}", total_error_count);
+
+        if total_error_count > 0 {
+            self.error_message = Some(format!(
+                "Bulk export complete: {} IMG files from {} WZ files. {} errors occurred. Check console for details.",
+                total_img_count, total_files, total_error_count
+            ));
+        } else {
+            self.error_message = Some(format!(
+                "Successfully exported {} IMG files from {} WZ files to {}",
+                total_img_count, total_files, output_dir.display()
+            ));
+        }
+    }
+
+    fn export_img_files(&mut self, root: &WzNodeArc, output_dir: &PathBuf) {
+        // Create output directory if it doesn't exist
+        if let Err(e) = fs::create_dir_all(output_dir) {
+            eprintln!("Failed to create output directory: {}", e);
+            self.error_message = Some(format!("Failed to create output directory: {}", e));
+            return;
+        }
+
+        let mut img_count = 0;
+        let mut error_count = 0;
+
+        walk_node(root, true, &mut |n: &WzNodeArc| {
+            let node_read = n.read().unwrap();
+
+            // Check if this node is an Image type
+            if let WzObjectType::Image(wz_image) = &node_read.object_type {
+                // Get the full path
+                let full_path = node_read.get_full_path();
+
+                // Split path into directory components and filename
+                let path_parts: Vec<&str> = full_path.split('/').collect();
+
+                if path_parts.is_empty() {
+                    error_count += 1;
+                    eprintln!("Invalid path: {}", full_path);
+                    return;
+                }
+
+                // Create directory structure (all parts except the last one, which is the filename)
+                let dir_parts = &path_parts[..path_parts.len().saturating_sub(1)];
+                let filename = path_parts.last().unwrap_or(&"unknown");
+
+                // Build the directory path
+                let mut current_dir = output_dir.clone();
+                for part in dir_parts {
+                    current_dir = current_dir.join(part);
+                }
+
+                // Create the directory structure
+                if let Err(e) = fs::create_dir_all(&current_dir) {
+                    error_count += 1;
+                    eprintln!("Failed to create directory {}: {}", current_dir.display(), e);
+                    return;
+                }
+
+                // Build output path (filename already has .img extension)
+                let output_path = current_dir.join(filename);
+
+                // Extract IMG file bytes from the reader
+                let reader_ref = &wz_image.reader;
+                let offset = wz_image.offset;
+                let block_size = wz_image.block_size;
+
+                // Get the bytes from the reader
+                let bytes = reader_ref.get_slice(offset..offset + block_size);
+
+                // Write the IMG file
+                match fs::write(&output_path, bytes) {
+                    Ok(_) => {
+                        img_count += 1;
+                        if img_count % 10 == 0 {
+                            println!("Exported {} IMG files so far...", img_count);
+                        }
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        eprintln!("Failed to write IMG file to {}: {}", output_path.display(), e);
+                    }
+                }
+            }
+        });
+
+        println!("Export complete: {} IMG files exported, {} errors", img_count, error_count);
+        if error_count > 0 {
+            self.error_message = Some(format!("Export complete: {} IMG files exported, {} errors occurred. Check console for details.", img_count, error_count));
+        } else {
+            self.error_message = Some(format!("Successfully exported {} IMG files to {}", img_count, output_dir.display()));
+        }
+    }
+
     fn export_all_pngs(&mut self, root: &WzNodeArc, output_dir: &PathBuf) {
         // Create output directory if it doesn't exist
         if let Err(e) = fs::create_dir_all(output_dir) {
@@ -643,21 +885,22 @@ impl WzViewerApp {
             self.error_message = Some(format!("Failed to create output directory: {}", e));
             return;
         }
-        
+
         let mut png_count = 0;
         let mut error_count = 0;
-        
+
         walk_node(root, true, &mut |n: &WzNodeArc| {
             let node_read = n.read().unwrap();
-            
+
             // Check if this node is a PNG
             if node_read.try_as_png().is_some() {
-                // Get the full path and create a safe filename
+                // Get the full path
                 let full_path = node_read.get_full_path();
-                // Replace forward slashes with dashes to create a flat filename
-                let safe_name = full_path.replace("/", "-");
+
+                // Replace forward slashes with underscores to create a flat filename
+                let safe_name = full_path.replace("/", "_");
                 let output_path = output_dir.join(format!("{}.png", safe_name));
-                
+
                 // Extract and save the PNG
                 match get_image(n) {
                     Ok(dynamic_img) => {
@@ -681,7 +924,7 @@ impl WzViewerApp {
                 }
             }
         });
-        
+
         println!("Export complete: {} PNGs exported, {} errors", png_count, error_count);
         if error_count > 0 {
             self.error_message = Some(format!("Export complete: {} PNGs exported, {} errors occurred. Check console for details.", png_count, error_count));
