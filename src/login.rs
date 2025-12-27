@@ -205,10 +205,12 @@ pub struct LoginState {
     // Loading screen assets
     loading_background: Option<TextureWithOrigin>,
     loading_circle_frames: Vec<TextureWithOrigin>,
+    loading_bar_frames: Vec<TextureWithOrigin>,
     loading_cancel_button: Button,
     showing_loading: bool,
     loading_animation_time: f32,
     loading_current_frame: usize,
+    loading_bar_current_frame: usize,
 }
 
 impl LoginState {
@@ -232,10 +234,12 @@ impl LoginState {
             loaded: false,
             loading_background: None,
             loading_circle_frames: Vec::new(),
+            loading_bar_frames: Vec::new(),
             loading_cancel_button: Button::new(400.0, 300.0),
             showing_loading: false,
             loading_animation_time: 0.0,
             loading_current_frame: 0,
+            loading_bar_current_frame: 0,
         }
     }
 
@@ -358,6 +362,19 @@ impl LoginState {
             }
         }
 
+        // Load loading bar animation frames (0-10)
+        for i in 0..=10 {
+            let path = format!("Notice/Loading/bar/{}", i);
+            match load_png_from_node(&root_node, &path) {
+                Ok(two) => {
+                    info!("Loading bar frame {} loaded: {}x{}, origin: ({}, {})",
+                        i, two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
+                    self.loading_bar_frames.push(two);
+                }
+                Err(e) => error!("Failed to load loading bar frame {}: {}", i, e),
+            }
+        }
+
         // Load loading cancel button states
         info!("Loading cancel button...");
         match load_png_from_node(&root_node, "Notice/Loading/BtCancel/normal/0") {
@@ -435,6 +452,11 @@ impl LoginState {
             if self.loading_animation_time >= FRAME_DURATION {
                 self.loading_animation_time -= FRAME_DURATION;
                 self.loading_current_frame = (self.loading_current_frame + 1) % self.loading_circle_frames.len();
+
+                // Also animate the loading bar
+                if !self.loading_bar_frames.is_empty() {
+                    self.loading_bar_current_frame = (self.loading_bar_current_frame + 1) % self.loading_bar_frames.len();
+                }
             }
 
             // Update cancel button position (centered relative to loading background)
@@ -604,6 +626,7 @@ impl LoginState {
             self.showing_loading = true;
             self.loading_animation_time = 0.0;
             self.loading_current_frame = 0;
+            self.loading_bar_current_frame = 0;
 
             // Reset cancel button to normal state
             self.loading_cancel_button.state = ButtonState::Normal;
@@ -761,6 +784,23 @@ impl LoginState {
                     center_y - frame.origin.y
                 };
                 draw_texture(&frame.texture, draw_x, draw_y, WHITE);
+            }
+
+            // Draw loading bar animation
+            if !self.loading_bar_frames.is_empty() {
+                let bar_frame = &self.loading_bar_frames[self.loading_bar_current_frame];
+                // Center the bar horizontally, position it in the loading box
+                let draw_x = if bar_frame.origin.x == 0.0 && bar_frame.origin.y == 0.0 {
+                    center_x - (bar_frame.texture.width() / 2.0)
+                } else {
+                    center_x - bar_frame.origin.x
+                };
+                let draw_y = if bar_frame.origin.x == 0.0 && bar_frame.origin.y == 0.0 {
+                    center_y - (bar_frame.texture.height() / 2.0)
+                } else {
+                    center_y - bar_frame.origin.y
+                };
+                draw_texture(&bar_frame.texture, draw_x, draw_y, WHITE);
             }
 
             // Draw cancel button
