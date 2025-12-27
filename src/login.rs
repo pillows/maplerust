@@ -21,6 +21,7 @@ enum ButtonState {
     Normal,
     MouseOver,
     Pressed,
+    Disabled,
 }
 
 /// Represents a clickable button with textures for different states
@@ -28,6 +29,7 @@ struct Button {
     normal: Option<TextureWithOrigin>,
     mouse_over: Option<TextureWithOrigin>,
     pressed: Option<TextureWithOrigin>,
+    disabled: Option<TextureWithOrigin>,
     x: f32,
     y: f32,
     width: f32,
@@ -41,6 +43,7 @@ impl Button {
             normal: None,
             mouse_over: None,
             pressed: None,
+            disabled: None,
             x,
             y,
             width: 0.0,
@@ -50,6 +53,11 @@ impl Button {
     }
 
     fn update(&mut self) {
+        // Don't update if disabled
+        if self.state == ButtonState::Disabled {
+            return;
+        }
+
         let (mouse_x, mouse_y) = mouse_position();
 
         // Get the actual draw position accounting for origin offset
@@ -76,6 +84,11 @@ impl Button {
     }
 
     fn is_clicked(&self) -> bool {
+        // Don't register clicks if disabled
+        if self.state == ButtonState::Disabled {
+            return false;
+        }
+
         // Check if button was just released while mouse is over it
         let (mouse_x, mouse_y) = mouse_position();
 
@@ -98,6 +111,7 @@ impl Button {
             ButtonState::Normal => &self.normal,
             ButtonState::MouseOver => &self.mouse_over,
             ButtonState::Pressed => &self.pressed,
+            ButtonState::Disabled => &self.disabled,
         };
 
         if let Some(two) = tex_with_origin {
@@ -191,6 +205,7 @@ pub struct LoginState {
     // Loading screen assets
     loading_background: Option<TextureWithOrigin>,
     loading_circle_frames: Vec<TextureWithOrigin>,
+    loading_cancel_button: Button,
     showing_loading: bool,
     loading_animation_time: f32,
     loading_current_frame: usize,
@@ -217,6 +232,7 @@ impl LoginState {
             loaded: false,
             loading_background: None,
             loading_circle_frames: Vec::new(),
+            loading_cancel_button: Button::new(400.0, 300.0),
             showing_loading: false,
             loading_animation_time: 0.0,
             loading_current_frame: 0,
@@ -342,6 +358,23 @@ impl LoginState {
             }
         }
 
+        // Load loading cancel button states
+        info!("Loading cancel button...");
+        match load_png_from_node(&root_node, "Notice/Loading/BtCancel/normal/0") {
+            Ok(two) => {
+                info!("Cancel button normal loaded: {}x{}, origin: ({}, {})",
+                    two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
+                self.loading_cancel_button.width = two.texture.width();
+                self.loading_cancel_button.height = two.texture.height();
+                self.loading_cancel_button.normal = Some(two);
+            }
+            Err(e) => error!("Failed to load cancel button normal: {}", e),
+        }
+
+        self.loading_cancel_button.mouse_over = load_png_from_node(&root_node, "Notice/Loading/BtCancel/mouseOver/0").ok();
+        self.loading_cancel_button.pressed = load_png_from_node(&root_node, "Notice/Loading/BtCancel/pressed/0").ok();
+        self.loading_cancel_button.disabled = load_png_from_node(&root_node, "Notice/Loading/BtCancel/disabled/0").ok();
+
         // Load background from login.img (Map/Back/login.img)
         info!("Loading background assets...");
         let bg_bytes = match AssetManager::fetch_and_cache(BACKGROUND_URL, BACKGROUND_CACHE_NAME).await {
@@ -404,7 +437,54 @@ impl LoginState {
                 self.loading_current_frame = (self.loading_current_frame + 1) % self.loading_circle_frames.len();
             }
 
-            // Don't process login UI interactions while loading, but continue to update UI positions
+            // Update cancel button position (centered relative to loading background)
+            let center_x = screen_width() / 2.0;
+            let center_y = screen_height() / 2.0;
+
+            // Calculate loading background position to align cancel button properly
+            if let Some(bg) = &self.loading_background {
+                // Calculate where the loading background is actually drawn
+                let bg_bottom_y = if bg.origin.x == 0.0 && bg.origin.y == 0.0 {
+                    center_y - (bg.texture.height() / 2.0) + bg.texture.height()
+                } else {
+                    center_y - bg.origin.y + bg.texture.height()
+                };
+
+                // Position cancel button centered horizontally
+                // Button draws at (x - origin.x, y - origin.y), so we need to account for that
+                if let Some(btn_tex) = &self.loading_cancel_button.normal {
+                    // To center the button: draw_x should be center_x - width/2
+                    // Since draw_x = x - origin.x, we need: x - origin.x = center_x - width/2
+                    // Therefore: x = center_x - width/2 + origin.x
+                    self.loading_cancel_button.x = center_x - (btn_tex.texture.width() / 2.0) + btn_tex.origin.x;
+
+                    // For Y: position INSIDE the background box, near the bottom
+                    // Target draw position: bg_bottom_y - button_height - padding
+                    let target_draw_y = bg_bottom_y - btn_tex.texture.height() - 10.0; // 10px padding from bottom
+                    // Since draw_y = y - origin.y, we need: y = target_draw_y + origin.y
+                    self.loading_cancel_button.y = target_draw_y + btn_tex.origin.y;
+                } else {
+                    self.loading_cancel_button.x = center_x;
+                    self.loading_cancel_button.y = bg_bottom_y - 30.0;
+                }
+            } else {
+                // Fallback if background not loaded
+                self.loading_cancel_button.x = center_x;
+                self.loading_cancel_button.y = center_y + 55.0;
+            }
+
+            // Update cancel button state
+            self.loading_cancel_button.update();
+
+            // Check if cancel button was clicked
+            if self.loading_cancel_button.is_clicked() {
+                info!("Cancel button clicked - dismissing loading screen");
+                self.showing_loading = false;
+                self.loading_cancel_button.state = ButtonState::Disabled;
+            }
+
+            // Don't process login UI interactions while loading
+            return;
         }
 
         let center_x = screen_width() / 2.0;
@@ -524,6 +604,9 @@ impl LoginState {
             self.showing_loading = true;
             self.loading_animation_time = 0.0;
             self.loading_current_frame = 0;
+
+            // Reset cancel button to normal state
+            self.loading_cancel_button.state = ButtonState::Normal;
         }
     }
 
@@ -679,6 +762,9 @@ impl LoginState {
                 };
                 draw_texture(&frame.texture, draw_x, draw_y, WHITE);
             }
+
+            // Draw cancel button
+            self.loading_cancel_button.draw();
         }
     }
 }
