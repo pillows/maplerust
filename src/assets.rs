@@ -2,9 +2,11 @@ use macroquad::prelude::*;
 use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzNodeCast};
-use wz_reader::property::Vector2D;
 
 use wz_reader::WzObjectType;
+
+#[cfg(not(target_arch = "wasm32"))]
+use memmap2::MmapOptions;
 
 /// Structure to hold an animation frame with its texture and origin coordinates
 #[derive(Clone)]
@@ -27,6 +29,25 @@ extern "C" {
 pub struct AssetManager;
 
 impl AssetManager {
+    /// Helper function to prepare bytes for WzReader
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_wz_data(bytes: Vec<u8>) -> Result<memmap2::Mmap, String> {
+        let mut mmap = MmapOptions::new()
+            .len(bytes.len())
+            .map_anon()
+            .map_err(|e| format!("Failed to create anonymous mmap: {}", e))?;
+
+        mmap.copy_from_slice(&bytes);
+
+        mmap.make_read_only()
+            .map_err(|e| format!("Failed to make mmap read-only: {}", e))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn prepare_wz_data(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+        Ok(bytes)
+    }
+
     pub async fn fetch_and_cache(url: &str, cache_path: &str) -> Result<Vec<u8>, String> {
         let idb_url = format!("idb://{}", cache_path);
         info!("Checking cache at: {}", idb_url);
@@ -80,8 +101,9 @@ impl AssetManager {
         let wz_iv = guess_iv_from_wz_img(&bytes).ok_or("Unable to guess version from img file")?;
 
         // Create Reader
-        // WASM fix: Mmap logic removed from library, WzReader now accepts Vec<u8>
-        let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+        let byte_len = bytes.len();
+        let wz_data = Self::prepare_wz_data(bytes)?;
+        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
 
         // Create WzImage
         // Derive node name from cache_path
@@ -90,7 +112,7 @@ impl AssetManager {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown.img");
 
-        let _wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
+        let _wz_image = WzImage::new(&name.into(), 0, byte_len, &reader);
 
         // Create Root Node
         let _node: WzNodeArc = WzNode::new(&name.into(), _wz_image, None).into();
@@ -173,7 +195,9 @@ impl AssetManager {
         let wz_iv = guess_iv_from_wz_img(&bytes).ok_or("Unable to guess version from img file")?;
 
         // Create Reader
-        let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+        let byte_len = bytes.len();
+        let wz_data = Self::prepare_wz_data(bytes)?;
+        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
 
         // Create WzImage
         let name = std::path::Path::new(cache_path)
@@ -181,7 +205,7 @@ impl AssetManager {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown.img");
 
-        let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
+        let wz_image = WzImage::new(&name.into(), 0, byte_len, &reader);
 
         // Create Root Node
         let node: WzNodeArc = WzNode::new(&name.into(), wz_image, None).into();
@@ -239,7 +263,9 @@ impl AssetManager {
         let wz_iv = guess_iv_from_wz_img(&bytes).ok_or("Unable to guess version from img file")?;
 
         // Create Reader
-        let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+        let byte_len = bytes.len();
+        let wz_data = Self::prepare_wz_data(bytes)?;
+        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
 
         // Create WzImage
         let name = std::path::Path::new(cache_path)
@@ -247,7 +273,7 @@ impl AssetManager {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown.img");
 
-        let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
+        let wz_image = WzImage::new(&name.into(), 0, byte_len, &reader);
 
         // Create Root Node
         let node: WzNodeArc = WzNode::new(&name.into(), wz_image, None).into();
@@ -312,7 +338,9 @@ impl AssetManager {
         let wz_iv = guess_iv_from_wz_img(&bytes).ok_or("Unable to guess version from img file")?;
 
         // Create Reader
-        let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+        let byte_len = bytes.len();
+        let wz_data = Self::prepare_wz_data(bytes)?;
+        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
 
         // Create WzImage
         let name = std::path::Path::new(cache_path)
@@ -320,7 +348,7 @@ impl AssetManager {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown.img");
 
-        let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
+        let wz_image = WzImage::new(&name.into(), 0, byte_len, &reader);
 
         // Create Root Node
         let node: WzNodeArc = WzNode::new(&name.into(), wz_image, None).into();
@@ -481,13 +509,21 @@ impl AssetManager {
             }
         };
 
-        let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+        let byte_len = bytes.len();
+        let wz_data = match Self::prepare_wz_data(bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to prepare WZ data: {}", e);
+                return Vec::new();
+            }
+        };
+        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
         let name = std::path::Path::new(cache_name)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown.img");
 
-        let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
+        let wz_image = WzImage::new(&name.into(), 0, byte_len, &reader);
         let root_node: WzNodeArc = WzNode::new(&name.into(), wz_image, None).into();
 
         // Parse root node once

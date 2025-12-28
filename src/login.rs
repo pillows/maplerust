@@ -4,10 +4,13 @@ use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType, WzNodeCast};
 
+#[cfg(not(target_arch = "wasm32"))]
+use memmap2::MmapOptions;
+
 const LOGIN_URL: &str = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/UI/Login.img";
-const LOGIN_CACHE_NAME: &str = "Login.img";
+const LOGIN_CACHE_NAME: &str = "/01/UI/Login.img";
 const BACKGROUND_URL: &str = "https://scribbles-public.s3.amazonaws.com/tutorial/01/Map/Back/login.img";
-const BACKGROUND_CACHE_NAME: &str = "login_back.img";
+const BACKGROUND_CACHE_NAME: &str = "/01/Map/Back/login.img";
 
 /// Structure to hold texture with its origin point
 struct TextureWithOrigin {
@@ -194,6 +197,13 @@ pub struct LoginState {
     password: String,
     focused_field: FocusedField,
 
+    // Transition state
+    should_transition: bool,
+    transition_alpha: f32,
+    transition_duration: f32,
+    transition_time: f32,
+    is_transitioning_out: bool,
+
     // Positioning offsets for fine-tuning
     id_offset_x: f32,
     id_offset_y: f32,
@@ -220,6 +230,25 @@ pub struct LoginState {
 }
 
 impl LoginState {
+    /// Helper function to prepare bytes for WzReader
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_wz_data(bytes: Vec<u8>) -> Result<memmap2::Mmap, String> {
+        let mut mmap = MmapOptions::new()
+            .len(bytes.len())
+            .map_anon()
+            .map_err(|e| format!("Failed to create anonymous mmap: {}", e))?;
+
+        mmap.copy_from_slice(&bytes);
+
+        mmap.make_read_only()
+            .map_err(|e| format!("Failed to make mmap read-only: {}", e))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn prepare_wz_data(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+        Ok(bytes)
+    }
+
     pub fn new() -> Self {
         Self {
             background: None,
@@ -233,6 +262,11 @@ impl LoginState {
             username: String::new(),
             password: String::new(),
             focused_field: FocusedField::Username,
+            should_transition: false,
+            transition_alpha: 1.0,
+            transition_duration: 0.5,
+            transition_time: 0.0,
+            is_transitioning_out: false,
             id_offset_x: -100.0,
             id_offset_y: -51.0,
             pw_offset_x: -100.0,
@@ -280,8 +314,16 @@ impl LoginState {
         };
 
         // Create Reader and WZ structure
-        let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
-        let wz_image = WzImage::new(&LOGIN_CACHE_NAME.into(), 0, bytes.len(), &reader);
+        let byte_len = bytes.len();
+        let wz_data = match Self::prepare_wz_data(bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to prepare WZ data: {}", e);
+                return;
+            }
+        };
+        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let wz_image = WzImage::new(&LOGIN_CACHE_NAME.into(), 0, byte_len, &reader);
         let root_node: WzNodeArc = WzNode::new(&LOGIN_CACHE_NAME.into(), wz_image, None).into();
 
         // Parse root node once
@@ -458,8 +500,17 @@ impl LoginState {
             }
         };
 
-        let bg_reader = Arc::new(WzReader::new(bg_bytes.clone()).with_iv(bg_wz_iv));
-        let bg_wz_image = WzImage::new(&BACKGROUND_CACHE_NAME.into(), 0, bg_bytes.len(), &bg_reader);
+        let bg_byte_len = bg_bytes.len();
+        let bg_wz_data = match Self::prepare_wz_data(bg_bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to prepare WZ data for background: {}", e);
+                self.loaded = true;
+                return;
+            }
+        };
+        let bg_reader = Arc::new(WzReader::new(bg_wz_data).with_iv(bg_wz_iv));
+        let bg_wz_image = WzImage::new(&BACKGROUND_CACHE_NAME.into(), 0, bg_byte_len, &bg_reader);
         let bg_root_node: WzNodeArc = WzNode::new(&BACKGROUND_CACHE_NAME.into(), bg_wz_image, None).into();
 
         if let Err(e) = bg_root_node.write().unwrap().parse(&bg_root_node) {
@@ -484,6 +535,18 @@ impl LoginState {
 
     pub fn update(&mut self, dt: f32) {
         if !self.loaded {
+            return;
+        }
+
+        // Update transition animation
+        if self.is_transitioning_out {
+            self.transition_time += dt;
+            self.transition_alpha = 1.0 - (self.transition_time / self.transition_duration).min(1.0);
+
+            if self.transition_alpha <= 0.0 {
+                self.should_transition = true;
+            }
+            // Don't process other updates during transition
             return;
         }
 
@@ -698,14 +761,9 @@ impl LoginState {
             info!("Username: {}", self.username);
             info!("Password: {}", self.password);
 
-            // Show loading screen
-            self.showing_loading = true;
-            self.loading_animation_time = 0.0;
-            self.loading_current_frame = 0;
-            self.loading_bar_current_frame = 0;
-
-            // Reset cancel button to normal state
-            self.loading_cancel_button.state = ButtonState::Normal;
+            // Start fade-out transition to character selection
+            self.is_transitioning_out = true;
+            self.transition_time = 0.0;
         }
 
         if self.new_button.is_clicked() {
@@ -738,13 +796,17 @@ impl LoginState {
         let center_x = screen_width() / 2.0;
         let center_y = screen_height() / 2.0;
 
+        // Calculate alpha for fade effect
+        let alpha = (self.transition_alpha * 255.0) as u8;
+        let color = Color::from_rgba(255, 255, 255, alpha);
+
         // Draw background first (so it appears behind everything)
         if let Some(bg) = &self.background {
             // Position background so its origin point is at screen center
             let draw_x = center_x - bg.origin.x;
             let draw_y = center_y - bg.origin.y;
 
-            draw_texture(&bg.texture, draw_x, draw_y, WHITE);
+            draw_texture(&bg.texture, draw_x, draw_y, color);
         }
 
         // Draw frame centered on screen
@@ -753,7 +815,7 @@ impl LoginState {
             let draw_x = center_x - frame.origin.x;
             let draw_y = center_y - frame.origin.y;
 
-            draw_texture(&frame.texture, draw_x, draw_y, WHITE);
+            draw_texture(&frame.texture, draw_x, draw_y, color);
         }
 
         // Draw signboard
@@ -762,7 +824,7 @@ impl LoginState {
             let draw_x = center_x - signboard.origin.x;
             let draw_y = center_y - signboard.origin.y;
 
-            draw_texture(&signboard.texture, draw_x, draw_y, WHITE);
+            draw_texture(&signboard.texture, draw_x, draw_y, color);
         }
 
         // Draw ID label/input
@@ -774,19 +836,20 @@ impl LoginState {
             let show_label = self.username.is_empty();
 
             if show_label {
-                draw_texture(&id_label.texture, draw_x, draw_y, WHITE);
+                draw_texture(&id_label.texture, draw_x, draw_y, color);
             } else {
                 // Draw username text input
                 let font_size = 16.0;
                 let texture_height = id_label.texture.height();
                 let text_y = draw_y + (texture_height / 2.0) + (font_size / 3.0);
 
+                let text_color = Color::from_rgba(0, 0, 0, alpha);
                 draw_text(
                     &self.username,
                     draw_x + 5.0,
                     text_y,
                     font_size,
-                    BLACK,
+                    text_color,
                 );
             }
 
@@ -802,7 +865,8 @@ impl LoginState {
                 let blink_speed = 1.0; // blinks per second
                 let time = get_time() as f32;
                 if (time * blink_speed * 2.0) % 2.0 < 1.0 {
-                    draw_line(cursor_x, text_y - font_size * 0.75, cursor_x, text_y + font_size * 0.25, 2.0, BLACK);
+                    let cursor_color = Color::from_rgba(0, 0, 0, alpha);
+                    draw_line(cursor_x, text_y - font_size * 0.75, cursor_x, text_y + font_size * 0.25, 2.0, cursor_color);
                 }
             }
         }
@@ -816,7 +880,7 @@ impl LoginState {
             let show_label = self.password.is_empty();
 
             if show_label {
-                draw_texture(&pw_label.texture, draw_x, draw_y, WHITE);
+                draw_texture(&pw_label.texture, draw_x, draw_y, color);
             } else {
                 // Draw password text input (masked)
                 let password_masked: String = self.password.chars().map(|_| '*').collect();
@@ -824,12 +888,13 @@ impl LoginState {
                 let texture_height = pw_label.texture.height();
                 let text_y = draw_y + (texture_height / 2.0) + (font_size / 3.0);
 
+                let text_color = Color::from_rgba(0, 0, 0, alpha);
                 draw_text(
                     &password_masked,
                     draw_x + 5.0,
                     text_y,
                     font_size,
-                    BLACK,
+                    text_color,
                 );
             }
 
@@ -846,15 +911,27 @@ impl LoginState {
                 let blink_speed = 1.0; // blinks per second
                 let time = get_time() as f32;
                 if (time * blink_speed * 2.0) % 2.0 < 1.0 {
-                    draw_line(cursor_x, text_y - font_size * 0.75, cursor_x, text_y + font_size * 0.25, 2.0, BLACK);
+                    let cursor_color = Color::from_rgba(0, 0, 0, alpha);
+                    draw_line(cursor_x, text_y - font_size * 0.75, cursor_x, text_y + font_size * 0.25, 2.0, cursor_color);
                 }
             }
         }
 
-        // Draw buttons
-        self.login_button.draw();
-        self.new_button.draw();
-        self.quit_button.draw();
+        // Draw buttons with fade effect
+        for button in &[&self.login_button, &self.new_button, &self.quit_button] {
+            let tex_with_origin = match button.state {
+                ButtonState::Normal => &button.normal,
+                ButtonState::MouseOver => &button.mouse_over,
+                ButtonState::Pressed => &button.pressed,
+                ButtonState::Disabled => &button.disabled,
+            };
+
+            if let Some(two) = tex_with_origin {
+                let draw_x = button.x - two.origin.x;
+                let draw_y = button.y - two.origin.y;
+                draw_texture(&two.texture, draw_x, draw_y, color);
+            }
+        }
 
         // Draw loading screen overlay if active (on top of everything)
         if self.showing_loading {
@@ -911,6 +988,11 @@ impl LoginState {
             // Draw cancel button
             self.loading_cancel_button.draw();
         }
+    }
+
+    /// Check if should transition to character selection screen
+    pub fn should_transition_to_char_select(&self) -> bool {
+        self.should_transition
     }
 }
 

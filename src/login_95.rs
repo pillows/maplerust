@@ -5,9 +5,9 @@ use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType, WzNodeCast};
 
 const LOGIN_URL: &str = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/UI/Login.img";
-const LOGIN_CACHE_NAME: &str = "Login.img";
+const LOGIN_CACHE_NAME: &str = "/01/UI/Login.img";
 const BACKGROUND_URL: &str = "https://scribbles-public.s3.amazonaws.com/tutorial/01/Map/Back/login.img";
-const BACKGROUND_CACHE_NAME: &str = "login_back.img";
+const BACKGROUND_CACHE_NAME: &str = "/01/Map/Back/login.img";
 
 /// Structure to hold texture with its origin point
 struct TextureWithOrigin {

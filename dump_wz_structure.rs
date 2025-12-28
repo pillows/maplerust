@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -42,8 +43,8 @@ fn main() {
 
     println!("Detected IV: {:?}", wz_iv);
 
-    // Create reader
-    let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+    // Create reader (using from_buff for native builds)
+    let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
 
     // Get filename without extension
     let name = std::path::Path::new(input_path)
@@ -59,11 +60,11 @@ fn main() {
 
     println!("Parsing WZ structure...");
 
-    // Collect structure
-    let mut log_output = String::new();
-    log_output.push_str(&format!("=== WZ Structure for {} ===\n\n", input_path));
+    // Collect structure (using RefCell for interior mutability)
+    let log_output = RefCell::new(String::new());
+    log_output.borrow_mut().push_str(&format!("=== WZ Structure for {} ===\n\n", input_path));
 
-    walk_node(&node, true, &mut |n: &WzNodeArc| {
+    walk_node(&node, true, &|n: &WzNodeArc| {
         let read = n.read().unwrap();
         let path = read.get_full_path();
         let type_name = match &read.object_type {
@@ -94,9 +95,10 @@ fn main() {
                 wz_reader::property::WzValue::Lua(_) => "Lua",
             },
         };
-        log_output.push_str(&format!("{} [{}]\n", path, type_name));
+        log_output.borrow_mut().push_str(&format!("{} [{}]\n", path, type_name));
     });
 
+    let log_output = log_output.into_inner();
     println!("Structure parsed ({} bytes of output)", log_output.len());
 
     // Write to file

@@ -5,7 +5,7 @@ use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType, WzNodeCast};
 
 const LOGIN_URL: &str = "https://scribbles-public.s3.us-east-1.amazonaws.com/Login.img";
-const LOGIN_CACHE_NAME: &str = "Login.img";
+const LOGIN_CACHE_NAME: &str = "/Login.img";
 
 /// Button state for UI interactions
 #[derive(PartialEq, Clone, Copy)]
