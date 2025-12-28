@@ -186,6 +186,8 @@ pub struct LoginState {
     id_label: Option<TextureWithOrigin>,
     pw_label: Option<TextureWithOrigin>,
     login_button: Button,
+    new_button: Button,
+    quit_button: Button,
 
     // Input state
     username: String,
@@ -199,6 +201,10 @@ pub struct LoginState {
     pw_offset_y: f32,
     button_offset_x: f32,
     button_offset_y: f32,
+    new_button_offset_x: f32,
+    new_button_offset_y: f32,
+    quit_button_offset_x: f32,
+    quit_button_offset_y: f32,
 
     loaded: bool,
 
@@ -222,15 +228,21 @@ impl LoginState {
             id_label: None,
             pw_label: None,
             login_button: Button::new(400.0, 300.0),
+            new_button: Button::new(400.0, 300.0),
+            quit_button: Button::new(400.0, 300.0),
             username: String::new(),
             password: String::new(),
-            focused_field: FocusedField::None,
+            focused_field: FocusedField::Username,
             id_offset_x: -100.0,
             id_offset_y: -51.0,
             pw_offset_x: -100.0,
             pw_offset_y: -25.0,
             button_offset_x: 68.0,
             button_offset_y: -51.0,
+            new_button_offset_x: 68.0,
+            new_button_offset_y: -25.0,
+            quit_button_offset_x: 68.0,
+            quit_button_offset_y: 1.0,
             loaded: false,
             loading_background: None,
             loading_circle_frames: Vec::new(),
@@ -335,6 +347,38 @@ impl LoginState {
 
         self.login_button.mouse_over = load_png_from_node(&root_node, "Title/BtLogin/mouseOver/0").ok();
         self.login_button.pressed = load_png_from_node(&root_node, "Title/BtLogin/pressed/0").ok();
+
+        // Load new button states
+        info!("Loading new button...");
+        match load_png_from_node(&root_node, "Title/BtNew/normal/0") {
+            Ok(two) => {
+                info!("New button normal loaded: {}x{}, origin: ({}, {})",
+                    two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
+                self.new_button.width = two.texture.width();
+                self.new_button.height = two.texture.height();
+                self.new_button.normal = Some(two);
+            }
+            Err(e) => error!("Failed to load new button normal: {}", e),
+        }
+
+        self.new_button.mouse_over = load_png_from_node(&root_node, "Title/BtNew/mouseOver/0").ok();
+        self.new_button.pressed = load_png_from_node(&root_node, "Title/BtNew/pressed/0").ok();
+
+        // Load quit button states
+        info!("Loading quit button...");
+        match load_png_from_node(&root_node, "Title/BtQuit/normal/0") {
+            Ok(two) => {
+                info!("Quit button normal loaded: {}x{}, origin: ({}, {})",
+                    two.texture.width(), two.texture.height(), two.origin.x, two.origin.y);
+                self.quit_button.width = two.texture.width();
+                self.quit_button.height = two.texture.height();
+                self.quit_button.normal = Some(two);
+            }
+            Err(e) => error!("Failed to load quit button normal: {}", e),
+        }
+
+        self.quit_button.mouse_over = load_png_from_node(&root_node, "Title/BtQuit/mouseOver/0").ok();
+        self.quit_button.pressed = load_png_from_node(&root_node, "Title/BtQuit/pressed/0").ok();
 
         // Load Notice/Loading assets
         info!("Loading Notice/Loading assets...");
@@ -512,13 +556,45 @@ impl LoginState {
         let center_x = screen_width() / 2.0;
         let center_y = screen_height() / 2.0;
 
-        // Update button position relative to screen center
+        // Update login button position relative to screen center
         self.login_button.x = center_x + self.button_offset_x;
         self.login_button.y = center_y + self.button_offset_y;
 
-        // Update button state based on mouse position (only if not showing loading)
+        // Position New and Quit buttons relative to the signboard
+        if let Some(signboard) = &self.signboard {
+            // Calculate signboard bounds
+            let signboard_draw_x = center_x - signboard.origin.x;
+            let signboard_draw_y = center_y - signboard.origin.y;
+            let signboard_bottom = signboard_draw_y + signboard.texture.height();
+
+            // Position New button in bottom left corner of signboard
+            if let Some(new_tex) = &self.new_button.normal {
+                // X position: left edge of signboard + padding + origin offset
+                self.new_button.x = signboard_draw_x + 10.0 + new_tex.origin.x;
+                // Y position: bottom of signboard - button height - padding + origin offset
+                self.new_button.y = signboard_bottom - new_tex.texture.height() - 10.0 + new_tex.origin.y;
+            }
+
+            // Position Quit button in bottom right corner of signboard
+            if let Some(quit_tex) = &self.quit_button.normal {
+                // X position: right edge of signboard - button width - padding + origin offset
+                self.quit_button.x = signboard_draw_x + signboard.texture.width() - quit_tex.texture.width() - 10.0 + quit_tex.origin.x;
+                // Y position: bottom of signboard - button height - padding + origin offset
+                self.quit_button.y = signboard_bottom - quit_tex.texture.height() - 10.0 + quit_tex.origin.y;
+            }
+        } else {
+            // Fallback to offset-based positioning if signboard not loaded
+            self.new_button.x = center_x + self.new_button_offset_x;
+            self.new_button.y = center_y + self.new_button_offset_y;
+            self.quit_button.x = center_x + self.quit_button_offset_x;
+            self.quit_button.y = center_y + self.quit_button_offset_y;
+        }
+
+        // Update button states based on mouse position (only if not showing loading)
         if !self.showing_loading {
             self.login_button.update();
+            self.new_button.update();
+            self.quit_button.update();
         }
 
         // Only handle input if not showing loading screen
@@ -631,6 +707,14 @@ impl LoginState {
             // Reset cancel button to normal state
             self.loading_cancel_button.state = ButtonState::Normal;
         }
+
+        if self.new_button.is_clicked() {
+            info!("New button clicked! (Create new account)");
+        }
+
+        if self.quit_button.is_clicked() {
+            info!("Quit button clicked!");
+        }
     }
 
     pub fn draw(&self) {
@@ -704,11 +788,20 @@ impl LoginState {
                     font_size,
                     BLACK,
                 );
+            }
 
-                // Draw cursor when focused
-                if self.focused_field == FocusedField::Username {
-                    let text_width = measure_text(&self.username, None, font_size as u16, 1.0).width;
-                    let cursor_x = draw_x + 5.0 + text_width;
+            // Draw cursor when focused (even if field is empty)
+            if self.focused_field == FocusedField::Username {
+                let font_size = 16.0;
+                let texture_height = id_label.texture.height();
+                let text_y = draw_y + (texture_height / 2.0) + (font_size / 3.0);
+                let text_width = measure_text(&self.username, None, font_size as u16, 1.0).width;
+                let cursor_x = draw_x + 5.0 + text_width;
+
+                // Make cursor blink
+                let blink_speed = 1.0; // blinks per second
+                let time = get_time() as f32;
+                if (time * blink_speed * 2.0) % 2.0 < 1.0 {
                     draw_line(cursor_x, text_y - font_size * 0.75, cursor_x, text_y + font_size * 0.25, 2.0, BLACK);
                 }
             }
@@ -738,18 +831,30 @@ impl LoginState {
                     font_size,
                     BLACK,
                 );
+            }
 
-                // Draw cursor when focused
-                if self.focused_field == FocusedField::Password {
-                    let text_width = measure_text(&password_masked, None, font_size as u16, 1.0).width;
-                    let cursor_x = draw_x + 5.0 + text_width;
+            // Draw cursor when focused (even if field is empty)
+            if self.focused_field == FocusedField::Password {
+                let password_masked: String = self.password.chars().map(|_| '*').collect();
+                let font_size = 16.0;
+                let texture_height = pw_label.texture.height();
+                let text_y = draw_y + (texture_height / 2.0) + (font_size / 3.0);
+                let text_width = measure_text(&password_masked, None, font_size as u16, 1.0).width;
+                let cursor_x = draw_x + 5.0 + text_width;
+
+                // Make cursor blink
+                let blink_speed = 1.0; // blinks per second
+                let time = get_time() as f32;
+                if (time * blink_speed * 2.0) % 2.0 < 1.0 {
                     draw_line(cursor_x, text_y - font_size * 0.75, cursor_x, text_y + font_size * 0.25, 2.0, BLACK);
                 }
             }
         }
 
-        // Draw login button
+        // Draw buttons
         self.login_button.draw();
+        self.new_button.draw();
+        self.quit_button.draw();
 
         // Draw loading screen overlay if active (on top of everything)
         if self.showing_loading {
