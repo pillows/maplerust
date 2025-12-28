@@ -5,15 +5,17 @@ use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzObjectType, WzReader};
 
-/// Cache for loaded object textures
+/// Cache for loaded object textures and parsed WZ nodes
 pub struct ObjectCache {
     objects: HashMap<String, Texture2D>,
+    wz_nodes: HashMap<String, WzNodeArc>, // Cache parsed WZ IMG files
 }
 
 impl ObjectCache {
     pub fn new() -> Self {
         Self {
             objects: HashMap::new(),
+            wz_nodes: HashMap::new(),
         }
     }
 
@@ -30,17 +32,17 @@ impl ObjectCache {
         let key = format!("{}/{}/{}/{}", oS, l0, l1, l2);
 
         // Return cached texture if available
-        if let Some(texture) = self.objects.get(&key) {
+        if let Some(texture) = self.objects.get(&key).cloned() {
             // If cached, we need to get origin separately
             // For now, fetch origin each time (could be optimized to cache origin too)
-            match Self::get_object_origin_internal(oS, l0, l1, l2).await {
-                Ok((ox, oy)) => return Some((texture.clone(), ox, oy)),
-                Err(_) => return Some((texture.clone(), 0, 0)), // Default to (0,0) if origin not found
+            match self.get_object_origin_internal(oS, l0, l1, l2).await {
+                Ok((ox, oy)) => return Some((texture, ox, oy)),
+                Err(_) => return Some((texture, 0, 0)), // Default to (0,0) if origin not found
             }
         }
 
         // Load the object if not already loaded
-        match Self::load_object_with_origin(oS, l0, l1, l2).await {
+        match self.load_object_with_origin_cached(oS, l0, l1, l2).await {
             Ok((texture, ox, oy)) => {
                 self.objects.insert(key.clone(), texture.clone());
                 Some((texture, ox, oy))
@@ -52,9 +54,10 @@ impl ObjectCache {
         }
     }
 
-    /// Load a specific object from an object set with origin
+    /// Load a specific object from an object set with origin (using cached WZ nodes)
     /// Returns: (texture, origin_x, origin_y)
-    async fn load_object_with_origin(
+    async fn load_object_with_origin_cached(
+        &mut self,
         oS: &str,
         l0: &str,
         l1: &str,
@@ -62,37 +65,46 @@ impl ObjectCache {
     ) -> Result<(Texture2D, i32, i32), String> {
         info!("Loading object: {}/{}/{}/{}", oS, l0, l1, l2);
 
-        // Build URL for the object file
-        let url = format!(
-            "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Obj/{}.img",
-            oS
-        );
-        let cache_name = format!("/01/Map/Obj/{}.img", oS);
+        // Check if we already have this WZ node cached
+        let root_node = if let Some(cached_node) = self.wz_nodes.get(oS) {
+            info!("  Using cached WZ node for {}.img", oS);
+            cached_node.clone()
+        } else {
+            // Build URL for the object file
+            let url = format!(
+                "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Obj/{}.img",
+                oS
+            );
+            let cache_name = format!("/01/Map/Obj/{}.img", oS);
 
-        // Fetch and parse the object file
-        let bytes = AssetManager::fetch_and_cache(&url, &cache_name)
-            .await
-            .map_err(|e| format!("Failed to fetch object: {}", e))?;
+            // Fetch and parse the object file
+            let bytes = AssetManager::fetch_and_cache(&url, &cache_name)
+                .await
+                .map_err(|e| format!("Failed to fetch object: {}", e))?;
 
-        info!("Parsing object file (size: {} bytes)...", bytes.len());
+            info!("  Parsing object file (size: {} bytes)...", bytes.len());
 
-        let wz_iv = guess_iv_from_wz_img(&bytes)
-            .ok_or_else(|| "Unable to guess version from object file".to_string())?;
+            let wz_iv = guess_iv_from_wz_img(&bytes)
+                .ok_or_else(|| "Unable to guess version from object file".to_string())?;
 
-        let byte_len = bytes.len();
+            let byte_len = bytes.len();
 
-        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
-        let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
-        let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
-        let root_node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
+            let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
+            let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
+            let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
+            let node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
 
-        root_node
-            .write()
-            .unwrap()
-            .parse(&root_node)
-            .map_err(|e| format!("Failed to parse object WZ: {:?}", e))?;
+            node.write()
+                .unwrap()
+                .parse(&node)
+                .map_err(|e| format!("Failed to parse object WZ: {:?}", e))?;
 
-        info!("Object WZ file parsed successfully");
+            info!("  Object WZ file parsed successfully");
+
+            // Cache the parsed node
+            self.wz_nodes.insert(oS.to_string(), node.clone());
+            node
+        };
 
         // Navigate to the specific object: l0/l1/l2/0
         // Build path based on which layers are present
@@ -171,38 +183,47 @@ impl ObjectCache {
         }
     }
 
-    /// Internal helper to get object origin
+    /// Internal helper to get object origin (reuses cached node if available)
     async fn get_object_origin_internal(
+        &mut self,
         oS: &str,
         l0: &str,
         l1: &str,
         l2: &str,
     ) -> Result<(i32, i32), String> {
-        let url = format!(
-            "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Obj/{}.img",
-            oS
-        );
-        let cache_name = format!("/01/Map/Obj/{}.img", oS);
+        // Check if we already have this WZ node cached
+        let root_node = if let Some(cached_node) = self.wz_nodes.get(oS) {
+            cached_node.clone()
+        } else {
+            let url = format!(
+                "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Obj/{}.img",
+                oS
+            );
+            let cache_name = format!("/01/Map/Obj/{}.img", oS);
 
-        let bytes = AssetManager::fetch_and_cache(&url, &cache_name)
-            .await
-            .map_err(|e| format!("Failed to fetch object: {}", e))?;
+            let bytes = AssetManager::fetch_and_cache(&url, &cache_name)
+                .await
+                .map_err(|e| format!("Failed to fetch object: {}", e))?;
 
-        let wz_iv = guess_iv_from_wz_img(&bytes)
-            .ok_or_else(|| "Unable to guess version from object file".to_string())?;
+            let wz_iv = guess_iv_from_wz_img(&bytes)
+                .ok_or_else(|| "Unable to guess version from object file".to_string())?;
 
-        let byte_len = bytes.len();
+            let byte_len = bytes.len();
 
-        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
-        let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
-        let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
-        let root_node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
+            let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
+            let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
+            let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
+            let node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
 
-        root_node
-            .write()
-            .unwrap()
-            .parse(&root_node)
-            .map_err(|e| format!("Failed to parse object WZ: {:?}", e))?;
+            node.write()
+                .unwrap()
+                .parse(&node)
+                .map_err(|e| format!("Failed to parse object WZ: {:?}", e))?;
+
+            // Cache the parsed node
+            self.wz_nodes.insert(oS.to_string(), node.clone());
+            node
+        };
 
         // Navigate to the specific object
         let base_path = if !l2.is_empty() {

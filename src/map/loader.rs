@@ -3,6 +3,7 @@ use crate::assets::AssetManager;
 use crate::map::data::*;
 use crate::map::tile_loader::TileCache;
 use crate::map::object_loader::ObjectCache;
+use crate::map::npc_loader::NpcCache;
 use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType};
@@ -124,7 +125,7 @@ impl MapLoader {
 
         // Parse life (NPCs/mobs)
         if let Ok(life_node) = root_node.read().unwrap().at_path_parsed("life") {
-            Self::parse_life(&life_node, &mut map_data)?;
+            Self::parse_life(&life_node, &mut map_data).await?;
         }
 
         // Parse ladders/ropes
@@ -342,18 +343,47 @@ impl MapLoader {
     }
 
     /// Parse life (NPCs and mobs)
-    fn parse_life(node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
+    async fn parse_life(node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
         let node_read = node.read().unwrap();
+        let mut npc_cache = NpcCache::new();
 
         for (_name, child) in node_read.children.iter() {
             let child_read = child.read().unwrap();
             drop(child_read);
 
+            let id = Self::get_string_property_from_node(child, "id").unwrap_or_default();
+            let life_type = Self::get_string_property_from_node(child, "type").unwrap_or_default();
+            let x = Self::get_int_property_from_node(child, "x").unwrap_or(0);
+            let y = Self::get_int_property_from_node(child, "y").unwrap_or(0);
+
+            info!("  Life: id='{}', type='{}', pos=({},{})", id, life_type, x, y);
+
+            // Load NPC name and texture if this is an NPC
+            let (name, texture, origin_x, origin_y) = if life_type == "n" && !id.is_empty() {
+                // Get NPC name from String/Npc.img
+                let npc_name = NpcCache::get_npc_name(&id).await.unwrap_or_default();
+
+                // Load NPC texture
+                match npc_cache.get_or_load_npc(&id).await {
+                    Some((tex, ox, oy)) => {
+                        info!("    Loaded NPC: {} ({})", npc_name, id);
+                        (npc_name, Some(tex), ox, oy)
+                    }
+                    None => {
+                        warn!("    Failed to load NPC texture: {} ({})", npc_name, id);
+                        (npc_name, None, 0, 0)
+                    }
+                }
+            } else {
+                (String::new(), None, 0, 0)
+            };
+
             let life = Life {
-                id: Self::get_string_property_from_node(child, "id").unwrap_or_default(),
-                life_type: Self::get_string_property_from_node(child, "type").unwrap_or_default(),
-                x: Self::get_int_property_from_node(child, "x").unwrap_or(0),
-                y: Self::get_int_property_from_node(child, "y").unwrap_or(0),
+                id,
+                name,
+                life_type,
+                x,
+                y,
                 foothold: Self::get_int_property_from_node(child, "fh").unwrap_or(0),
                 cx: Self::get_int_property_from_node(child, "cx").unwrap_or(0),
                 cy: Self::get_int_property_from_node(child, "cy").unwrap_or(0),
@@ -362,6 +392,9 @@ impl MapLoader {
                 mob_time: Self::get_int_property_from_node(child, "mobTime").unwrap_or(0),
                 flip: Self::get_int_property_from_node(child, "f").unwrap_or(0) == 1,
                 hide: Self::get_int_property_from_node(child, "hide").unwrap_or(0) == 1,
+                origin_x,
+                origin_y,
+                texture,
             };
 
             map_data.life.push(life);

@@ -129,6 +129,7 @@ pub struct Portal {
 #[derive(Debug, Clone)]
 pub struct Life {
     pub id: String,
+    pub name: String,      // NPC/Mob name from String data
     pub life_type: String, // "n" for NPC, "m" for mob
     pub x: i32,
     pub y: i32,
@@ -140,6 +141,9 @@ pub struct Life {
     pub mob_time: i32,
     pub flip: bool,
     pub hide: bool,
+    pub origin_x: i32,     // Origin offset X
+    pub origin_y: i32,     // Origin offset Y
+    pub texture: Option<Texture2D>,
 }
 
 /// Ladder or rope data

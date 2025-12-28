@@ -6,6 +6,7 @@ pub struct MapRenderer {
     debug_footholds: bool,
     debug_portals: bool,
     debug_bounds: bool,
+    npc_font: Option<Font>,
 }
 
 impl MapRenderer {
@@ -14,6 +15,24 @@ impl MapRenderer {
             debug_footholds: flags::SHOW_HITBOXES,
             debug_portals: true,
             debug_bounds: true,
+            npc_font: None,
+        }
+    }
+
+    /// Load the NPC name font (call this once during initialization)
+    pub async fn load_font(&mut self) {
+        // Load Liberation Sans Bold font (metric-compatible Arial Bold replacement)
+        // Liberation Sans is an open-source font that looks identical to Arial
+        info!("Loading Arial Bold-compatible font for NPC names...");
+
+        match load_ttf_font("https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/MaplestoryLight.ttf").await {
+            Ok(font) => {
+                info!("Loaded Arial Bold-compatible font successfully");
+                self.npc_font = Some(font);
+            }
+            Err(e) => {
+                warn!("Failed to load Arial Bold-compatible font: {:?}, using default font", e);
+            }
         }
     }
 
@@ -27,6 +46,9 @@ impl MapRenderer {
 
         // Draw objects (decorative elements)
         self.render_objects(map, camera_x, camera_y);
+
+        // Draw NPCs and mobs
+        self.render_life(map, camera_x, camera_y);
 
         // Draw footholds (platforms) for debugging
         if self.debug_footholds {
@@ -216,6 +238,98 @@ impl MapRenderer {
                     draw_circle(screen_x, screen_y, 5.0, Color::from_rgba(255, 165, 0, 150));
                     let info = format!("O{}", obj.id);
                     draw_text(&info, screen_x + 10.0, screen_y + 5.0, 12.0, ORANGE);
+                }
+            }
+        }
+    }
+
+    /// Render life (NPCs and mobs)
+    fn render_life(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+        for life in &map.life {
+            // Skip if hidden
+            if life.hide {
+                continue;
+            }
+
+            // Calculate screen position
+            // Apply origin offset: origin defines the anchor point of the sprite
+            let screen_x = life.x as f32 - camera_x - life.origin_x as f32;
+            let screen_y = life.y as f32 - camera_y - life.origin_y as f32;
+
+            // Draw the NPC/mob texture if loaded
+            if let Some(texture) = &life.texture {
+                let params = DrawTextureParams {
+                    flip_x: life.flip,
+                    flip_y: false,
+                    ..Default::default()
+                };
+                draw_texture_ex(texture, screen_x, screen_y, WHITE, params);
+
+                // Draw NPC name label underneath sprite (for NPCs only)
+                if life.life_type == "n" && !life.name.is_empty() {
+                    let font_size = 12.0;
+
+                    // Measure text with the custom font if available
+                    let text_dims = if let Some(font) = &self.npc_font {
+                        measure_text(&life.name, Some(font), font_size as u16, 1.0)
+                    } else {
+                        measure_text(&life.name, None, font_size as u16, 1.0)
+                    };
+
+                    let label_x = screen_x + (texture.width() / 2.0) - (text_dims.width / 2.0);
+                    let label_y = screen_y + texture.height() + 20.0;
+
+                    // Draw text background for better readability
+                    let padding = 4.0;
+                    draw_rectangle(
+                        label_x - padding,
+                        label_y - text_dims.height - padding,
+                        text_dims.width + padding * 2.0,
+                        text_dims.height + padding * 2.0,
+                        Color::from_rgba(0, 0, 0, 150),
+                    );
+
+                    // Draw NPC name in yellow with custom font
+                    if let Some(font) = &self.npc_font {
+                        draw_text_ex(&life.name, label_x, label_y, TextParams {
+                            font: Some(font),
+                            font_size: font_size as u16,
+                            color: YELLOW,
+                            ..Default::default()
+                        });
+                    } else {
+                        draw_text(&life.name, label_x, label_y, font_size, YELLOW);
+                    }
+                }
+
+                // Draw life info for debugging
+                if flags::SHOW_DEBUG_UI {
+                    let info = if life.life_type == "n" {
+                        format!("NPC ID: {}", life.id)
+                    } else {
+                        format!("Mob: {}", life.id)
+                    };
+                    draw_text(&info, screen_x + 5.0, screen_y - 10.0, 10.0, YELLOW);
+                }
+            } else {
+                // Draw placeholder for missing life texture
+                if flags::SHOW_DEBUG_UI {
+                    let color = if life.life_type == "n" {
+                        GREEN
+                    } else {
+                        RED
+                    };
+                    draw_circle(screen_x, screen_y, 8.0, Color::from_rgba(color.r as u8, color.g as u8, color.b as u8, 150));
+                    let info = if life.life_type == "n" {
+                        if !life.name.is_empty() {
+                            life.name.clone()
+                        } else {
+                            format!("NPC:{}", life.id)
+                        }
+                    } else {
+                        format!("M:{}", life.id)
+                    };
+                    draw_text(&info, screen_x + 10.0, screen_y + 5.0, 10.0, color);
                 }
             }
         }

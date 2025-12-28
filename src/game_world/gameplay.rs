@@ -50,6 +50,10 @@ impl GameplayState {
     /// Load game assets including the map
     pub async fn load_assets(&mut self) {
         info!("Loading gameplay assets...");
+
+        // Load font for NPC names
+        self.map_renderer.load_font().await;
+
         self.load_map(&self.current_map_id.clone()).await;
         self.loaded = true;
         info!("Gameplay assets loaded successfully");
@@ -325,7 +329,7 @@ impl GameplayState {
 
         if !self.loaded {
             let text = "Loading Map...";
-            let font_size = 32.0;
+            let font_size = 12.0;
             let text_dimensions = measure_text(text, None, font_size as u16, 1.0);
             draw_text(
                 text,
