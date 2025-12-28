@@ -275,6 +275,12 @@ pub async fn run() {
                 state.update(dt);
                 state.draw();
 
+                // Check if we should load a new map
+                if let Some(map_id) = state.should_load_new_map() {
+                    info!("Loading new map from debug input: {}", map_id);
+                    state.load_map_from_input().await;
+                }
+
                 next_frame().await;
             }
         }

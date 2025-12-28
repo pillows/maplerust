@@ -64,7 +64,7 @@ fn main() {
     let log_output = RefCell::new(String::new());
     log_output.borrow_mut().push_str(&format!("=== WZ Structure for {} ===\n\n", input_path));
 
-    walk_node(&node, true, &|n: &WzNodeArc| {
+    walk_node(&node, true, &mut |n: &WzNodeArc| {
         let read = n.read().unwrap();
         let path = read.get_full_path();
         let type_name = match &read.object_type {

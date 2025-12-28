@@ -278,14 +278,7 @@ impl CharacterSelectionState {
         };
 
         let byte_len = bytes.len();
-        let wz_data = match Self::prepare_wz_data(bytes) {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to prepare WZ data: {}", e);
-                return;
-            }
-        };
-        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
         let wz_image = WzImage::new(&LOGIN_CACHE_NAME.into(), 0, byte_len, &reader);
         let root_node: WzNodeArc = WzNode::new(&LOGIN_CACHE_NAME.into(), wz_image, None).into();
 
@@ -318,11 +311,7 @@ impl CharacterSelectionState {
             };
 
             let bg_byte_len = bg_bytes.len();
-            let bg_wz_data = match Self::prepare_wz_data(bg_bytes) {
-                Ok(d) => d,
-                Err(_) => return,
-            };
-            let bg_reader = Arc::new(WzReader::new(bg_wz_data).with_iv(bg_wz_iv));
+            let bg_reader = Arc::new(WzReader::from_buff(&bg_bytes).with_iv(bg_wz_iv));
             let bg_wz_image = WzImage::new(&BACKGROUND_CACHE_NAME.into(), 0, bg_byte_len, &bg_reader);
             let bg_root_node: WzNodeArc = WzNode::new(&BACKGROUND_CACHE_NAME.into(), bg_wz_image, None).into();
 

@@ -5,6 +5,8 @@ use macroquad::prelude::*;
 pub struct MapData {
     pub info: MapInfo,
     pub backgrounds: Vec<BackgroundLayer>,
+    pub tiles: Vec<Tile>,
+    pub objects: Vec<MapObject>,
     pub footholds: Vec<Foothold>,
     pub portals: Vec<Portal>,
     pub life: Vec<Life>,
@@ -34,6 +36,7 @@ pub struct MapInfo {
     pub vr_right: i32,
     pub on_first_user_enter: String,
     pub on_user_enter: String,
+    pub map_name: String, // Map name from String/Map.img
 }
 
 /// Background layer with positioning and scrolling
@@ -53,6 +56,42 @@ pub struct BackgroundLayer {
     pub front: bool, // Draw in front of everything
     pub flip_x: bool,
     pub flip_y: bool,
+    pub texture: Option<Texture2D>,
+}
+
+/// Tile (ground texture) data
+#[derive(Debug, Clone)]
+pub struct Tile {
+    pub id: i32,           // Tile ID
+    pub layer: i32,        // Layer number (3, 4, 6, etc.)
+    pub tileset: String,   // Tileset name from info/tS
+    pub u: String,         // Category (enH0, bsc, etc.)
+    pub no: i32,           // Tile number in tileset
+    pub x: i32,
+    pub y: i32,
+    pub z_m: i32,          // Z-depth
+    pub origin_x: i32,     // Origin offset X
+    pub origin_y: i32,     // Origin offset Y
+    pub texture: Option<Texture2D>,
+}
+
+/// Map object (decorative elements)
+#[derive(Debug, Clone)]
+pub struct MapObject {
+    pub id: i32,           // Object ID
+    pub layer: i32,        // Layer number
+    pub oS: String,        // Object set name
+    pub l0: String,        // Layer 0
+    pub l1: String,        // Layer 1
+    pub l2: String,        // Layer 2
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,            // Z-depth
+    pub z_m: i32,          // Z-depth multiplier
+    pub f: bool,           // Flip
+    pub r: i32,            // Rotation
+    pub origin_x: i32,     // Origin offset X
+    pub origin_y: i32,     // Origin offset Y
     pub texture: Option<Texture2D>,
 }
 
@@ -128,6 +167,8 @@ impl MapData {
         Self {
             info: MapInfo::default(),
             backgrounds: Vec::new(),
+            tiles: Vec::new(),
+            objects: Vec::new(),
             footholds: Vec::new(),
             portals: Vec::new(),
             life: Vec::new(),

@@ -102,8 +102,7 @@ impl AssetManager {
 
         // Create Reader
         let byte_len = bytes.len();
-        let wz_data = Self::prepare_wz_data(bytes)?;
-        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
 
         // Create WzImage
         // Derive node name from cache_path
@@ -196,8 +195,7 @@ impl AssetManager {
 
         // Create Reader
         let byte_len = bytes.len();
-        let wz_data = Self::prepare_wz_data(bytes)?;
-        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
 
         // Create WzImage
         let name = std::path::Path::new(cache_path)
@@ -264,8 +262,7 @@ impl AssetManager {
 
         // Create Reader
         let byte_len = bytes.len();
-        let wz_data = Self::prepare_wz_data(bytes)?;
-        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
 
         // Create WzImage
         let name = std::path::Path::new(cache_path)
@@ -339,8 +336,7 @@ impl AssetManager {
 
         // Create Reader
         let byte_len = bytes.len();
-        let wz_data = Self::prepare_wz_data(bytes)?;
-        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
 
         // Create WzImage
         let name = std::path::Path::new(cache_path)
@@ -510,14 +506,7 @@ impl AssetManager {
         };
 
         let byte_len = bytes.len();
-        let wz_data = match Self::prepare_wz_data(bytes) {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to prepare WZ data: {}", e);
-                return Vec::new();
-            }
-        };
-        let reader = Arc::new(WzReader::new(wz_data).with_iv(wz_iv));
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
         let name = std::path::Path::new(cache_name)
             .file_name()
             .and_then(|n| n.to_str())

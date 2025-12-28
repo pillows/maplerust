@@ -16,6 +16,12 @@ pub struct GameplayState {
     map_data: Option<MapData>,
     map_renderer: MapRenderer,
     current_map_id: String,
+    // Debug map loader
+    map_input: String,
+    map_input_active: bool,
+    loading_new_map: bool,
+    backspace_timer: f32,
+    backspace_repeat_delay: f32,
 }
 
 impl GameplayState {
@@ -32,16 +38,28 @@ impl GameplayState {
             loaded: false,
             map_data: None,
             map_renderer: MapRenderer::new(),
-            current_map_id: "000010000".to_string(), // Default starting map
+            current_map_id: "100000000".to_string(), // Default starting map
+            map_input: String::new(),
+            map_input_active: false,
+            loading_new_map: false,
+            backspace_timer: 0.0,
+            backspace_repeat_delay: 0.05, // Repeat every 50ms when held
         }
     }
 
     /// Load game assets including the map
     pub async fn load_assets(&mut self) {
         info!("Loading gameplay assets...");
+        self.load_map(&self.current_map_id.clone()).await;
+        self.loaded = true;
+        info!("Gameplay assets loaded successfully");
+    }
 
-        // Load the starting map
-        match MapLoader::load_map(&self.current_map_id).await {
+    /// Load a specific map by ID
+    async fn load_map(&mut self, map_id: &str) {
+        info!("Loading map: {}", map_id);
+
+        match MapLoader::load_map(map_id).await {
             Ok(map) => {
                 info!("Map loaded successfully!");
 
@@ -57,19 +75,145 @@ impl GameplayState {
                     info!("No spawn portal found, using default position");
                 }
 
+                self.current_map_id = map_id.to_string();
                 self.map_data = Some(map);
+                self.loading_new_map = false;
             }
             Err(e) => {
-                error!("Failed to load map: {}", e);
+                error!("Failed to load map {}: {}", map_id, e);
+                self.loading_new_map = false;
             }
         }
+    }
 
-        self.loaded = true;
-        info!("Gameplay assets loaded successfully");
+    /// Trigger loading a new map from the debug input
+    pub async fn load_map_from_input(&mut self) {
+        if !self.map_input.is_empty() {
+            self.loading_new_map = true;
+            let map_id = self.map_input.clone();
+            self.load_map(&map_id).await;
+            self.map_input.clear();
+            self.map_input_active = false;
+        }
+    }
+
+    /// Check if we should load a new map and return the map ID
+    pub fn should_load_new_map(&mut self) -> Option<String> {
+        if self.loading_new_map && !self.map_input.is_empty() {
+            Some(self.map_input.clone())
+        } else {
+            None
+        }
     }
 
     /// Update game logic
     pub fn update(&mut self, dt: f32) {
+        // Handle debug map input toggle with M key
+        if DebugFlags::should_show_debug_ui() && is_key_pressed(KeyCode::M) {
+            if self.map_input_active {
+                // Close the input and trigger loading if valid
+                if !self.map_input.is_empty() {
+                    self.loading_new_map = true;
+                    self.map_input_active = false;
+                } else {
+                    // Just close if empty
+                    self.map_input_active = false;
+                    self.map_input.clear();
+                }
+            } else {
+                // Open the input
+                self.map_input_active = true;
+                self.map_input = self.current_map_id.clone();
+            }
+        }
+
+        // Handle text input when map input is active
+        if self.map_input_active {
+            // Handle clipboard paste (Ctrl/Cmd + V)
+            // Check if modifier key is held AND V is pressed (not just down, to avoid repeats)
+            let modifier_held = if cfg!(target_os = "macos") {
+                is_key_down(KeyCode::LeftSuper) || is_key_down(KeyCode::RightSuper)
+            } else {
+                is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl)
+            };
+            
+            let paste_pressed = modifier_held && is_key_pressed(KeyCode::V);
+
+            if paste_pressed {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use clipboard::{ClipboardProvider, ClipboardContext};
+                    match ClipboardContext::new() {
+                        Ok(mut ctx) => {
+                            match ctx.get_contents() {
+                                Ok(contents) => {
+                                    // Filter to only digits (no length limit)
+                                    let filtered: String = contents.chars()
+                                        .filter(|c| c.is_ascii_digit())
+                                        .collect();
+                                    if !filtered.is_empty() {
+                                        self.map_input = filtered;
+                                        info!("Pasted map ID: {}", self.map_input);
+                                    } else {
+                                        warn!("Clipboard contents had no digits");
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to get clipboard contents: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to create clipboard context: {}", e);
+                        }
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    warn!("Clipboard paste not supported in WASM build");
+                }
+            }
+
+            // Get character input - no length limit, can type map IDs of any length
+            if let Some(character) = get_char_pressed() {
+                if character.is_ascii_digit() {
+                    self.map_input.push(character);
+                }
+            }
+
+            // Handle backspace with hold support
+            if is_key_down(KeyCode::Backspace) && !self.map_input.is_empty() {
+                if is_key_pressed(KeyCode::Backspace) {
+                    // First press - delete immediately
+                    self.map_input.pop();
+                    self.backspace_timer = 0.3; // Initial delay before repeat
+                } else {
+                    // Held down - use timer for repeat
+                    self.backspace_timer -= dt;
+                    if self.backspace_timer <= 0.0 {
+                        self.map_input.pop();
+                        self.backspace_timer = self.backspace_repeat_delay;
+                    }
+                }
+            } else {
+                self.backspace_timer = 0.0;
+            }
+
+            // Handle escape to close
+            if is_key_pressed(KeyCode::Escape) {
+                self.map_input_active = false;
+                self.map_input.clear();
+            }
+
+            // Don't process game controls when input is active
+            return;
+        }
+
+        // Check if we should load a map (triggered from elsewhere after Enter is pressed)
+        if self.loading_new_map {
+            return; // Don't process game logic while loading
+        }
+
         if !self.loaded || self.map_data.is_none() {
             return;
         }
@@ -233,9 +377,9 @@ impl GameplayState {
         let panel_width = 200.0;
         let mut panel_height = 100.0;
 
-        // Extend panel if debug UI is enabled
+        // Extend panel if debug UI is enabled (need more space for map name)
         if DebugFlags::should_show_debug_ui() {
-            panel_height = 180.0;
+            panel_height = 200.0;
         }
 
         // Background
@@ -270,18 +414,39 @@ impl GameplayState {
 
         // Debug info
         if DebugFlags::should_show_debug_ui() {
+            let mut y_offset = panel_y + 105.0;
+            let line_height = 20.0;
+            
             let fps = get_fps();
             let fps_text = format!("FPS: {}", fps);
-            draw_text(&fps_text, panel_x + 10.0, panel_y + 105.0, 14.0, YELLOW);
+            draw_text(&fps_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
+            y_offset += line_height;
+
+            // Map ID and name
+            if let Some(map_data) = &self.map_data {
+                let map_text = if !map_data.info.map_name.is_empty() {
+                    format!("Map: {} ({})", self.current_map_id, map_data.info.map_name)
+                } else {
+                    format!("Map: {}", self.current_map_id)
+                };
+                draw_text(&map_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
+                y_offset += line_height;
+            } else {
+                let map_text = format!("Map: {} (loading...)", self.current_map_id);
+                draw_text(&map_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
+                y_offset += line_height;
+            }
 
             let pos_text = format!("Pos: ({:.0}, {:.0})", self.player_x, self.player_y);
-            draw_text(&pos_text, panel_x + 10.0, panel_y + 125.0, 14.0, YELLOW);
+            draw_text(&pos_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
+            y_offset += line_height;
 
             let cam_text = format!("Cam: ({:.0}, {:.0})", self.camera_x, self.camera_y);
-            draw_text(&cam_text, panel_x + 10.0, panel_y + 145.0, 14.0, YELLOW);
+            draw_text(&cam_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
+            y_offset += line_height;
 
             if flags::GOD_MODE {
-                draw_text("GOD MODE", panel_x + 10.0, panel_y + 165.0, 14.0, RED);
+                draw_text("GOD MODE", panel_x + 10.0, y_offset, 14.0, RED);
             }
         }
 
@@ -299,10 +464,18 @@ impl GameplayState {
             );
         }
 
+        // Debug map loader UI
+        if DebugFlags::should_show_debug_ui() {
+            self.draw_map_loader_ui();
+        }
+
         // Controls hint at bottom
         let mut controls_text = "Controls: Arrow Keys or WASD to move".to_string();
         if flags::CAMERA_DEBUG_MODE {
             controls_text.push_str(" | Shift+Arrows: Camera");
+        }
+        if DebugFlags::should_show_debug_ui() {
+            controls_text.push_str(" | M: Load Map");
         }
         let font_size = 16.0;
         let text_dimensions = measure_text(&controls_text, None, font_size as u16, 1.0);
@@ -313,5 +486,86 @@ impl GameplayState {
             font_size,
             WHITE,
         );
+    }
+
+    /// Draw the debug map loader UI
+    fn draw_map_loader_ui(&self) {
+        // Wider box to accommodate longer map IDs (no length limit)
+        let box_width = 400.0;
+        let box_height = 100.0;
+        let box_x = screen_width() - box_width - 20.0;
+        let box_y = 20.0;
+
+        // Background
+        draw_rectangle(
+            box_x,
+            box_y,
+            box_width,
+            box_height,
+            Color::from_rgba(0, 0, 0, 200),
+        );
+
+        // Border
+        let border_color = if self.map_input_active {
+            YELLOW
+        } else {
+            GRAY
+        };
+        draw_rectangle_lines(box_x, box_y, box_width, box_height, 2.0, border_color);
+
+        // Title
+        draw_text("Map Loader (Press M)", box_x + 10.0, box_y + 25.0, 18.0, WHITE);
+
+        // Current map
+        let current_text = if let Some(map_data) = &self.map_data {
+            if !map_data.info.map_name.is_empty() {
+                format!("Current: {} ({})", self.current_map_id, map_data.info.map_name)
+            } else {
+                format!("Current: {}", self.current_map_id)
+            }
+        } else {
+            format!("Current: {}", self.current_map_id)
+        };
+        draw_text(&current_text, box_x + 10.0, box_y + 50.0, 16.0, LIGHTGRAY);
+
+        if self.map_input_active {
+            // Input box
+            let input_box_y = box_y + 60.0;
+            draw_rectangle(
+                box_x + 10.0,
+                input_box_y,
+                box_width - 20.0,
+                25.0,
+                Color::from_rgba(40, 40, 40, 255),
+            );
+            draw_rectangle_lines(
+                box_x + 10.0,
+                input_box_y,
+                box_width - 20.0,
+                25.0,
+                1.0,
+                YELLOW,
+            );
+
+            // Input text with cursor
+            let input_display = format!("{}|", self.map_input);
+            draw_text(&input_display, box_x + 15.0, input_box_y + 18.0, 16.0, WHITE);
+
+            // Instructions
+            let paste_key = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+            let instructions = format!("Type or {}+V to paste, M to load, ESC to cancel", paste_key);
+            draw_text(
+                &instructions,
+                box_x + 10.0,
+                box_y + 95.0,
+                11.0,
+                LIGHTGRAY,
+            );
+        }
+
+        // Show loading indicator
+        if self.loading_new_map {
+            draw_text("Loading...", box_x + box_width - 80.0, box_y + 25.0, 16.0, YELLOW);
+        }
     }
 }

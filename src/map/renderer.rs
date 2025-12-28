@@ -22,6 +22,12 @@ impl MapRenderer {
         // Draw backgrounds (layers behind player)
         self.render_backgrounds(map, camera_x, camera_y, false);
 
+        // Draw tiles (ground textures)
+        self.render_tiles(map, camera_x, camera_y);
+
+        // Draw objects (decorative elements)
+        self.render_objects(map, camera_x, camera_y);
+
         // Draw footholds (platforms) for debugging
         if self.debug_footholds {
             self.render_footholds(map, camera_x, camera_y);
@@ -68,38 +74,149 @@ impl MapRenderer {
             };
 
             // Calculate screen position
-            let screen_x = bg.x as f32 + parallax_x - camera_x;
-            let screen_y = bg.y as f32 + parallax_y - camera_y;
+            // Note: parallax already includes camera adjustment, so we don't subtract camera again
+            let screen_x = bg.x as f32 + parallax_x;
+            let screen_y = bg.y as f32 + parallax_y;
 
             // Calculate alpha
             let alpha = (bg.a as f32 / 255.0 * 255.0) as u8;
             let color = Color::from_rgba(255, 255, 255, alpha);
 
-            // Draw a placeholder for the background
-            // TODO: Load and draw actual background texture
-            // For now, draw a colored rectangle to show the layer
-            let bg_color = match bg.layer_num % 5 {
-                0 => Color::from_rgba(50, 50, 100, alpha / 3),
-                1 => Color::from_rgba(60, 60, 110, alpha / 3),
-                2 => Color::from_rgba(70, 70, 120, alpha / 3),
-                3 => Color::from_rgba(80, 80, 130, alpha / 3),
-                _ => Color::from_rgba(90, 90, 140, alpha / 3),
-            };
+            // Draw the actual background texture if loaded
+            if let Some(texture) = &bg.texture {
+                // Calculate texture dimensions
+                let tex_width = texture.width();
+                let tex_height = texture.height();
+                
+                // Handle tiling (cx and cy control repetition)
+                // If cx=0 or cy=0, tile infinitely to cover the visible screen
+                let should_tile = bg.cx > 0 || bg.cy > 0 || tex_width < screen_width() || tex_height < screen_height();
 
-            // Draw a simple gradient rectangle as placeholder
-            draw_rectangle(
-                screen_x,
-                screen_y,
-                screen_width(),
-                screen_height(),
-                bg_color,
-            );
+                if should_tile {
+                    // Calculate how many tiles needed to cover screen if cx/cy are 0
+                    let repeat_x = if bg.cx > 0 {
+                        bg.cx
+                    } else {
+                        // Tile horizontally to cover map width
+                        ((map.get_width() as f32 / tex_width).ceil() as i32).max(1)
+                    };
 
-            // Draw layer info for debugging
-            if flags::SHOW_DEBUG_UI {
-                let info = format!("BG Layer {}: {}/{} @({},{})",
-                    bg.layer_num, bg.bS, bg.no, bg.x, bg.y);
-                draw_text(&info, screen_x + 10.0, screen_y + 20.0, 16.0, WHITE);
+                    let repeat_y = if bg.cy > 0 {
+                        bg.cy
+                    } else {
+                        // Tile vertically to cover map height
+                        ((map.get_height() as f32 / tex_height).ceil() as i32).max(1)
+                    };
+
+                    for ty in 0..repeat_y {
+                        for tx in 0..repeat_x {
+                            let tile_x = screen_x + (tx as f32 * tex_width);
+                            let tile_y = screen_y + (ty as f32 * tex_height);
+
+                            draw_texture_ex(
+                                texture,
+                                tile_x,
+                                tile_y,
+                                color,
+                                DrawTextureParams {
+                                    flip_x: bg.flip_x,
+                                    flip_y: bg.flip_y,
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                } else {
+                    // Draw single tile
+                    draw_texture_ex(
+                        texture,
+                        screen_x,
+                        screen_y,
+                        color,
+                        DrawTextureParams {
+                            flip_x: bg.flip_x,
+                            flip_y: bg.flip_y,
+                            ..Default::default()
+                        },
+                    );
+                }
+
+                // Draw layer info for debugging
+                if flags::SHOW_DEBUG_UI {
+                    let info = format!("BG Layer {}: {}/{} @({},{})",
+                        bg.layer_num, bg.bS, bg.no, bg.x, bg.y);
+                    draw_text(&info, screen_x + 10.0, screen_y + 20.0, 16.0, WHITE);
+                }
+            }
+        }
+    }
+
+    /// Render tiles (ground textures)
+    fn render_tiles(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+        // Sort tiles by z_m (z-depth) so they render in the correct order
+        let mut sorted_tiles = map.tiles.clone();
+        sorted_tiles.sort_by_key(|tile| tile.z_m);
+
+        for tile in &sorted_tiles {
+            // Calculate screen position (tiles don't have parallax scrolling)
+            // Apply origin offset: origin defines the anchor point of the sprite
+            let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
+            let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
+
+            // Draw the tile texture if loaded
+            if let Some(texture) = &tile.texture {
+                draw_texture(texture, screen_x, screen_y, WHITE);
+
+                // Draw tile info for debugging
+                if flags::SHOW_DEBUG_UI {
+                    let info = format!("T{}: {}/{}", tile.id, tile.u, tile.no);
+                    draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, YELLOW);
+                }
+            } else {
+                // Draw placeholder for missing tile texture
+                if flags::SHOW_DEBUG_UI {
+                    draw_rectangle(screen_x, screen_y, 90.0, 60.0, Color::from_rgba(100, 50, 0, 100));
+                    let info = format!("T{}", tile.id);
+                    draw_text(&info, screen_x + 5.0, screen_y + 30.0, 12.0, RED);
+                }
+            }
+        }
+    }
+
+    /// Render objects (decorative elements)
+    fn render_objects(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+        // Sort objects by z-depth so they render in the correct order
+        let mut sorted_objects = map.objects.clone();
+        sorted_objects.sort_by_key(|obj| obj.z);
+
+        for obj in &sorted_objects {
+            // Calculate screen position (objects don't have parallax scrolling)
+            // Apply origin offset: origin defines the anchor point of the sprite
+            let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
+            let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
+
+            // Draw the object texture if loaded
+            if let Some(texture) = &obj.texture {
+                let params = DrawTextureParams {
+                    flip_x: obj.f,
+                    flip_y: false,
+                    rotation: (obj.r as f32).to_radians(),
+                    ..Default::default()
+                };
+                draw_texture_ex(texture, screen_x, screen_y, WHITE, params);
+
+                // Draw object info for debugging
+                if flags::SHOW_DEBUG_UI {
+                    let info = format!("O{}: {}", obj.id, obj.oS);
+                    draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, ORANGE);
+                }
+            } else {
+                // Draw placeholder for missing object texture
+                if flags::SHOW_DEBUG_UI {
+                    draw_circle(screen_x, screen_y, 5.0, Color::from_rgba(255, 165, 0, 150));
+                    let info = format!("O{}", obj.id);
+                    draw_text(&info, screen_x + 10.0, screen_y + 5.0, 12.0, ORANGE);
+                }
             }
         }
     }
