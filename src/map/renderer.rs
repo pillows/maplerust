@@ -279,8 +279,30 @@ impl MapRenderer {
                     (life.x as f32, life.y as f32, life.flip)
                 }
             } else {
-                // NPCs use static positions
-                (life.x as f32, life.y as f32, life.flip)
+                // NPCs use static positions, but snap Y to foothold if available
+                let mut npc_x = life.x as f32;
+                let mut npc_y = life.y as f32;
+                
+                // Snap NPC to foothold if it has one
+                if life.foothold != 0 {
+                    if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
+                        // Calculate Y position on the foothold at NPC's X
+                        let dx = fh.x2 - fh.x1;
+                        let dy = fh.y2 - fh.y1;
+                        let ix = npc_x as i32;
+                        
+                        let fh_y = if dx != 0 {
+                            (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                        } else {
+                            fh.y1 as f32
+                        };
+                        
+                        // Use foothold Y, but keep original X
+                        npc_y = fh_y;
+                    }
+                }
+                
+                (npc_x, npc_y, life.flip)
             };
 
             // Calculate screen position

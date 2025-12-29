@@ -275,6 +275,9 @@ pub async fn run() {
                 state.update(dt);
                 state.draw();
 
+                // Audio is handled directly in GameplayState::update()
+                // No need to check here
+
                 // Check if we should load a new map
                 if let Some(map_id) = state.should_load_new_map() {
                     info!("Loading new map from debug input: {}", map_id);

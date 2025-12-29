@@ -8,6 +8,7 @@ mod character;
 mod game_world;
 mod flags;
 mod map;
+mod audio;
 
 #[macroquad::main("RustMaple")]
 async fn main() {

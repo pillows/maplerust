@@ -50,17 +50,17 @@ impl AssetManager {
 
     pub async fn fetch_and_cache(url: &str, cache_path: &str) -> Result<Vec<u8>, String> {
         let idb_url = format!("idb://{}", cache_path);
-        info!("Checking cache at: {}", idb_url);
+        // info!("Checking cache at: {}", idb_url);
 
         // Try loading from IndexedDB first
         if let Ok(bytes) = load_file(&idb_url).await {
             if bytes.len() > 0 {
-                info!("Asset found in IndexedDB!");
+                // info!("Asset found in IndexedDB!");
                 return Ok(bytes);
             }
         }
 
-        info!("Asset NOT found in DB. Fetching from URL: {}", url);
+        // info!("Asset NOT found in DB. Fetching from URL: {}", url);
 
         // Fallback to HTTP
         match load_file(url).await {

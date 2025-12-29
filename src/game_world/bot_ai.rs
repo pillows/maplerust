@@ -68,7 +68,7 @@ impl BotAI {
                 if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
                     bot.y = foothold_y;
                     bot.on_ground = true;
-                    info!("Placed mob {} on foothold at y={}", life.id, foothold_y);
+                    // info!("Placed mob {} on foothold at y={}", life.id, foothold_y);
                 } else {
                     warn!("No foothold found below mob {} spawn point ({}, {})", life.id, bot.x, bot.y);
                 }

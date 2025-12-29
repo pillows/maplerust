@@ -33,6 +33,12 @@ pub struct GameplayState {
     loading_new_map: bool,
     backspace_timer: f32,
     backspace_repeat_delay: f32,
+    // NPC interaction tracking
+    last_npc_click_time: f32,
+    last_npc_click_id: Option<String>,
+    // Focus tracking
+    window_focused: bool,
+    last_dt: f32,
 }
 
 impl GameplayState {
@@ -59,6 +65,10 @@ impl GameplayState {
             backspace_timer: 0.0,
             backspace_repeat_delay: 0.05, // Repeat every 50ms when held
             mob_states: Vec::new(),
+            last_npc_click_time: -1.0,
+            last_npc_click_id: None,
+            window_focused: true,
+            last_dt: 0.016, // Default to ~60fps
             on_ladder: false,
             current_ladder_id: None,
             drop_through_platform: false,
@@ -213,6 +223,19 @@ impl GameplayState {
 
     /// Update game logic
     pub fn update(&mut self, dt: f32) {
+        // Handle window focus - prevent large dt values when tab is inactive
+        // Clamp dt to prevent physics issues when browser loses focus
+        let clamped_dt = if dt > 0.1 {
+            // If dt is very large (tab was inactive), use last known good dt
+            self.last_dt.min(0.1)
+        } else {
+            dt
+        };
+        self.last_dt = clamped_dt;
+        
+        // Check window focus state (macroquad doesn't expose this directly, so we infer from dt)
+        // If dt is reasonable, window is likely focused
+        self.window_focused = dt < 0.1;
         // Portal textures are already loaded in each Portal structure during map parsing
 
         // Handle debug map input toggle with M key
@@ -298,7 +321,7 @@ impl GameplayState {
                     self.backspace_timer = 0.3; // Initial delay before repeat
                 } else {
                     // Held down - use timer for repeat
-                    self.backspace_timer -= dt;
+                    self.backspace_timer -= clamped_dt;
                     if self.backspace_timer <= 0.0 {
                         self.map_input.pop();
                         self.backspace_timer = self.backspace_repeat_delay;
@@ -339,19 +362,77 @@ impl GameplayState {
         // Horizontal movement - no artificial boundaries
         // Player movement is limited by footholds, not viewport bounds
         if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
-            self.player_x -= move_speed * dt;
+            self.player_x -= move_speed * clamped_dt;
         }
         if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
-            self.player_x += move_speed * dt;
+            self.player_x += move_speed * clamped_dt;
         }
 
         // Free-roam vertical movement (Space + Up/Down or W/S)
         if free_roam {
             if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-                self.player_y -= move_speed * dt;
+                self.player_y -= move_speed * clamped_dt;
             }
             if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-                self.player_y += move_speed * dt;
+                self.player_y += move_speed * clamped_dt;
+            }
+        }
+        
+        // Handle NPC double-click interaction
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let (mouse_x, mouse_y) = mouse_position();
+            let world_x = mouse_x + self.camera_x;
+            let world_y = mouse_y + self.camera_y;
+            
+            // Check if click is on an NPC
+            for life in &map.life {
+                if life.life_type == "n" && !life.hide {
+                    // Calculate NPC position (snapped to foothold if available)
+                    let mut npc_x = life.x as f32;
+                    let mut npc_y = life.y as f32;
+                    
+                    if life.foothold != 0 {
+                        if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
+                            let dx = fh.x2 - fh.x1;
+                            let dy = fh.y2 - fh.y1;
+                            let ix = npc_x as i32;
+                            let fh_y = if dx != 0 {
+                                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                            } else {
+                                fh.y1 as f32
+                            };
+                            npc_y = fh_y;
+                        }
+                    }
+                    
+                    // Check if click is within NPC bounds (using texture size if available)
+                    let npc_width = if let Some(tex) = &life.texture { tex.width() } else { 40.0 };
+                    let npc_height = if let Some(tex) = &life.texture { tex.height() } else { 60.0 };
+                    let npc_screen_x = npc_x - self.camera_x - life.origin_x as f32;
+                    let npc_screen_y = npc_y - self.camera_y - life.origin_y as f32;
+                    
+                    if mouse_x >= npc_screen_x && mouse_x <= npc_screen_x + npc_width &&
+                       mouse_y >= npc_screen_y && mouse_y <= npc_screen_y + npc_height {
+                        
+                        let current_time = get_time() as f32;
+                        let double_click_threshold = 0.5; // 500ms
+                        
+                        // Check if this is a double-click on the same NPC
+                        if let Some(last_id) = &self.last_npc_click_id {
+                            if last_id == &life.id && 
+                               (current_time - self.last_npc_click_time) < double_click_threshold {
+                                // Double-click detected!
+                                info!("NPC interaction created: {} (ID: {})", life.name, life.id);
+                                info!("NPC interaction created: {} (ID: {})", life.name, life.id);
+                            }
+                        }
+                        
+                        // Update last click info
+                        self.last_npc_click_time = current_time;
+                        self.last_npc_click_id = Some(life.id.clone());
+                        break; // Only handle first NPC clicked
+                    }
+                }
             }
         }
 
@@ -427,10 +508,10 @@ impl GameplayState {
                 let climb_speed = 140.0;
 
                 if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-                    self.player_y -= climb_speed * dt;
+                    self.player_y -= climb_speed * clamped_dt;
                 }
                 if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-                    self.player_y += climb_speed * dt;
+                    self.player_y += climb_speed * clamped_dt;
                 }
 
                 // Clamp within ladder segment
@@ -480,11 +561,11 @@ impl GameplayState {
             // Apply gravity
             if flags::ENABLE_COLLISION && !flags::GOD_MODE {
                 let gravity = 800.0;
-                self.player_vy += gravity * dt;
+                self.player_vy += gravity * clamped_dt;
             }
 
             // Update vertical position
-            self.player_y += self.player_vy * dt;
+            self.player_y += self.player_vy * clamped_dt;
 
             // Check collision with footholds (only for vertical positioning, not horizontal limits)
             if flags::ENABLE_COLLISION {
@@ -546,7 +627,7 @@ impl GameplayState {
         }
 
         // Update bot AI
-        self.bot_ai.update(dt, map);
+        self.bot_ai.update(clamped_dt, map);
 
         // Camera follows player (unless in camera debug mode)
         if !flags::CAMERA_DEBUG_MODE {
@@ -567,16 +648,16 @@ impl GameplayState {
             let camera_speed = 300.0;
             if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
                 if is_key_down(KeyCode::Left) {
-                    self.camera_x -= camera_speed * dt;
+                    self.camera_x -= camera_speed * clamped_dt;
                 }
                 if is_key_down(KeyCode::Right) {
-                    self.camera_x += camera_speed * dt;
+                    self.camera_x += camera_speed * clamped_dt;
                 }
                 if is_key_down(KeyCode::Up) {
-                    self.camera_y -= camera_speed * dt;
+                    self.camera_y -= camera_speed * clamped_dt;
                 }
                 if is_key_down(KeyCode::Down) {
-                    self.camera_y += camera_speed * dt;
+                    self.camera_y += camera_speed * clamped_dt;
                 }
             }
         }
