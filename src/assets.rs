@@ -84,6 +84,26 @@ impl AssetManager {
         }
     }
 
+    /// Batch fetch multiple assets in parallel
+    /// Returns a Vec of Results in the same order as the input
+    pub async fn fetch_and_cache_batch(requests: Vec<(String, String)>) -> Vec<Result<Vec<u8>, String>> {
+        use futures::future::join_all;
+        
+        // Create futures for all requests - clone strings so each future owns them
+        let futures: Vec<_> = requests.into_iter()
+            .map(|(url, cache_path)| {
+                let url_clone = url.clone();
+                let cache_path_clone = cache_path.clone();
+                async move {
+                    Self::fetch_and_cache(&url_clone, &cache_path_clone).await
+                }
+            })
+            .collect();
+        
+        // Execute all in parallel
+        join_all(futures).await
+    }
+
     pub async fn load_texture(url: &str, cache_path: &str) -> Result<Texture2D, String> {
         let bytes = Self::fetch_and_cache(url, cache_path).await?;
         Ok(Texture2D::from_file_with_format(

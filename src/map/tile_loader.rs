@@ -7,7 +7,7 @@ use wz_reader::{WzImage, WzNode, WzNodeArc, WzObjectType, WzReader};
 
 /// Cache for loaded tile textures and parsed WZ nodes
 pub struct TileCache {
-    tiles: HashMap<String, Texture2D>,
+    tiles: HashMap<String, (Texture2D, i32, i32)>, // (texture, origin_x, origin_y)
     wz_nodes: HashMap<String, WzNodeArc>, // Cache parsed WZ IMG files
 }
 
@@ -17,6 +17,34 @@ impl TileCache {
             tiles: HashMap::new(),
             wz_nodes: HashMap::new(),
         }
+    }
+
+    /// Preload a tileset WZ file from already-fetched bytes
+    /// This allows batching I/O operations (fetch in parallel, then parse)
+    pub async fn preload_tileset_from_bytes(&mut self, tileset_name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        // Skip if already loaded
+        if self.wz_nodes.contains_key(tileset_name) {
+            return Ok(());
+        }
+
+        let wz_iv = guess_iv_from_wz_img(&bytes)
+            .ok_or_else(|| "Unable to guess version from tile file".to_string())?;
+
+        let byte_len = bytes.len();
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
+        let cache_name = format!("/01/Map/Tile/{}.img", tileset_name);
+        let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
+        let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
+        let node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
+
+        node.write()
+            .unwrap()
+            .parse(&node)
+            .map_err(|e| format!("Failed to parse tile WZ: {:?}", e))?;
+
+        // Cache the parsed node
+        self.wz_nodes.insert(tileset_name.to_string(), node);
+        Ok(())
     }
 
     /// Get or load a tile texture
@@ -30,20 +58,15 @@ impl TileCache {
     ) -> Option<(Texture2D, i32, i32)> {
         let key = format!("{}/{}/{}", tileset_name, category, tile_number);
 
-        // Return cached texture if available
-        if let Some(texture) = self.tiles.get(&key).cloned() {
-            // If cached, we need to get origin separately
-            // For now, fetch origin each time (could be optimized to cache origin too)
-            match self.get_tile_origin_internal(tileset_name, category, tile_number).await {
-                Ok((ox, oy)) => return Some((texture, ox, oy)),
-                Err(_) => return Some((texture, 0, 0)), // Default to (0,0) if origin not found
-            }
+        // Return cached texture+origin if available
+        if let Some((texture, ox, oy)) = self.tiles.get(&key).cloned() {
+            return Some((texture, ox, oy));
         }
 
         // Load the tileset if not already loaded
         match self.load_tile_with_origin_cached(tileset_name, category, tile_number).await {
             Ok((texture, ox, oy)) => {
-                self.tiles.insert(key.clone(), texture.clone());
+                self.tiles.insert(key.clone(), (texture.clone(), ox, oy));
                 Some((texture, ox, oy))
             }
             Err(e) => {
@@ -157,69 +180,6 @@ impl TileCache {
             }
             _ => Err(format!("Tile node is not a PNG: {}", tile_path)),
         }
-    }
-
-    /// Internal helper to get tile origin (reuses cached node if available)
-    async fn get_tile_origin_internal(
-        &mut self,
-        tileset_name: &str,
-        category: &str,
-        tile_number: i32,
-    ) -> Result<(i32, i32), String> {
-        // Check if we already have this WZ node cached
-        let root_node = if let Some(cached_node) = self.wz_nodes.get(tileset_name) {
-            cached_node.clone()
-        } else {
-            let url = format!(
-                "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Tile/{}.img",
-                tileset_name
-            );
-            let cache_name = format!("/01/Map/Tile/{}.img", tileset_name);
-
-            let bytes = AssetManager::fetch_and_cache(&url, &cache_name)
-                .await
-                .map_err(|e| format!("Failed to fetch tile: {}", e))?;
-
-            let wz_iv = guess_iv_from_wz_img(&bytes)
-                .ok_or_else(|| "Unable to guess version from tile file".to_string())?;
-
-            let byte_len = bytes.len();
-
-            let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
-            let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
-            let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
-            let node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
-
-            node.write()
-                .unwrap()
-                .parse(&node)
-                .map_err(|e| format!("Failed to parse tile WZ: {:?}", e))?;
-
-            // Cache the parsed node
-            self.wz_nodes.insert(tileset_name.to_string(), node.clone());
-            node
-        };
-
-        // Navigate to the specific tile: category/tile_number/origin
-        let tile_path = format!("{}/{}", category, tile_number);
-        let tile_node = root_node
-            .read()
-            .unwrap()
-            .at_path_parsed(&tile_path)
-            .map_err(|_| format!("Tile not found at path: {}", tile_path))?;
-
-        let tile_read = tile_node.read().unwrap();
-        if let Ok(origin_node) = tile_read.at_path_parsed("origin") {
-            let origin_read = origin_node.read().unwrap();
-            match &origin_read.object_type {
-                WzObjectType::Value(wz_reader::property::WzValue::Vector(vec)) => {
-                    return Ok((vec.0, vec.1));
-                }
-                _ => {}
-            }
-        }
-
-        Ok((0, 0)) // Default origin
     }
 
     /// Get tile origin (offset for rendering)

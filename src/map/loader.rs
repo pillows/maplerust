@@ -347,6 +347,27 @@ impl MapLoader {
         let node_read = node.read().unwrap();
         let mut npc_cache = NpcCache::new();
 
+        // FIRST PASS: Collect all NPC IDs and life data
+        use std::collections::HashSet;
+        let mut unique_npc_ids: HashSet<String> = HashSet::new();
+        
+        // Store life entries temporarily (we'll create Life structs after loading textures)
+        struct LifeData {
+            id: String,
+            life_type: String,
+            x: i32,
+            y: i32,
+            foothold: i32,
+            cx: i32,
+            cy: i32,
+            rx0: i32,
+            rx1: i32,
+            mob_time: i32,
+            flip: bool,
+            hide: bool,
+        }
+        let mut life_data: Vec<LifeData> = Vec::new();
+
         for (_name, child) in node_read.children.iter() {
             let child_read = child.read().unwrap();
             drop(child_read);
@@ -356,32 +377,12 @@ impl MapLoader {
             let x = Self::get_int_property_from_node(child, "x").unwrap_or(0);
             let y = Self::get_int_property_from_node(child, "y").unwrap_or(0);
 
-            info!("  Life: id='{}', type='{}', pos=({},{})", id, life_type, x, y);
-
-            // Load NPC name and texture if this is an NPC
-            let (name, texture, origin_x, origin_y) = if life_type == "n" && !id.is_empty() {
-                // Get NPC name from String/Npc.img
-                let npc_name = NpcCache::get_npc_name(&id).await.unwrap_or_default();
-
-                // Load NPC texture
-                match npc_cache.get_or_load_npc(&id).await {
-                    Some((tex, ox, oy)) => {
-                        info!("    Loaded NPC: {} ({})", npc_name, id);
-                        (npc_name, Some(tex), ox, oy)
-                    }
-                    None => {
-                        warn!("    Failed to load NPC texture: {} ({})", npc_name, id);
-                        (npc_name, None, 0, 0)
-                    }
-                }
-            } else {
-                (String::new(), None, 0, 0)
-            };
-
-            let life = Life {
-                id,
-                name,
-                life_type,
+            // Store life data
+            let f_val = Self::get_int_property_from_node(child, "f").unwrap_or(0);
+            let hide_val = Self::get_int_property_from_node(child, "hide").unwrap_or(0);
+            life_data.push(LifeData {
+                id: id.clone(),
+                life_type: life_type.clone(),
                 x,
                 y,
                 foothold: Self::get_int_property_from_node(child, "fh").unwrap_or(0),
@@ -390,8 +391,82 @@ impl MapLoader {
                 rx0: Self::get_int_property_from_node(child, "rx0").unwrap_or(0),
                 rx1: Self::get_int_property_from_node(child, "rx1").unwrap_or(0),
                 mob_time: Self::get_int_property_from_node(child, "mobTime").unwrap_or(0),
-                flip: Self::get_int_property_from_node(child, "f").unwrap_or(0) == 1,
-                hide: Self::get_int_property_from_node(child, "hide").unwrap_or(0) == 1,
+                flip: f_val == 1,
+                hide: hide_val == 1,
+            });
+
+            // Collect unique NPC IDs
+            if life_type == "n" && !id.is_empty() {
+                unique_npc_ids.insert(id);
+            }
+        }
+
+        // SECOND PASS: Batch fetch all unique NPC WZ files
+        if !unique_npc_ids.is_empty() {
+            info!("Batch fetching {} unique NPC files...", unique_npc_ids.len());
+            let npc_ids_vec: Vec<String> = unique_npc_ids.iter().cloned().collect();
+            let mut fetch_requests = Vec::new();
+            for npc_id in &npc_ids_vec {
+                let url = format!(
+                    "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Npc/{}.img",
+                    npc_id
+                );
+                let cache_name = format!("/01/Npc/{}.img", npc_id);
+                fetch_requests.push((url, cache_name));
+            }
+            
+            let fetch_results = AssetManager::fetch_and_cache_batch(fetch_requests).await;
+            
+            // Parse all the fetched files
+            info!("Parsing {} NPC files...", npc_ids_vec.len());
+            for (i, npc_id) in npc_ids_vec.iter().enumerate() {
+                if let Ok(bytes) = &fetch_results[i] {
+                    if let Err(e) = npc_cache.preload_npc_from_bytes(npc_id, bytes.clone()).await {
+                        warn!("Failed to parse NPC {}: {}", npc_id, e);
+                    }
+                }
+            }
+        }
+
+        // THIRD PASS: Load NPC names and textures, create life entries
+        info!("Loading {} life entries...", life_data.len());
+        for life_entry in life_data {
+            info!("  Life: id='{}', type='{}', pos=({},{})", life_entry.id, life_entry.life_type, life_entry.x, life_entry.y);
+
+            // Load NPC name and texture if this is an NPC
+            let (name, texture, origin_x, origin_y) = if life_entry.life_type == "n" && !life_entry.id.is_empty() {
+                // Get NPC name from String/Npc.img
+                let npc_name = NpcCache::get_npc_name(&life_entry.id).await.unwrap_or_default();
+
+                // Load NPC texture (should be cached now)
+                match npc_cache.get_or_load_npc(&life_entry.id).await {
+                    Some((tex, ox, oy)) => {
+                        info!("    Loaded NPC: {} ({})", npc_name, life_entry.id);
+                        (npc_name, Some(tex), ox, oy)
+                    }
+                    None => {
+                        warn!("    Failed to load NPC texture: {} ({})", npc_name, life_entry.id);
+                        (npc_name, None, 0, 0)
+                    }
+                }
+            } else {
+                (String::new(), None, 0, 0)
+            };
+
+            let life = Life {
+                id: life_entry.id,
+                name,
+                life_type: life_entry.life_type,
+                x: life_entry.x,
+                y: life_entry.y,
+                foothold: life_entry.foothold,
+                cx: life_entry.cx,
+                cy: life_entry.cy,
+                rx0: life_entry.rx0,
+                rx1: life_entry.rx1,
+                mob_time: life_entry.mob_time,
+                flip: life_entry.flip,
+                hide: life_entry.hide,
                 origin_x,
                 origin_y,
                 texture,
@@ -432,6 +507,12 @@ impl MapLoader {
         let root_read = root_node.read().unwrap();
         let mut tile_cache = TileCache::new();
 
+        // FIRST PASS: Collect all unique tileset files and tile requests
+        use std::collections::{HashSet, HashMap};
+        let mut unique_tilesets: HashSet<String> = HashSet::new();
+        let mut tile_requests: Vec<(String, String, i32)> = Vec::new(); // (tileset, u, no)
+        let mut tile_data: Vec<(i32, i32, String, String, i32, i32, i32, i32)> = Vec::new();
+
         // Iterate through all children looking for numbered layers
         for (layer_name, layer_child) in root_read.children.iter() {
             // Check if this is a numbered layer (e.g., "3", "4", "6")
@@ -463,43 +544,82 @@ impl MapLoader {
                         let y = Self::get_int_property_from_node(tile_child, "y").unwrap_or(0);
                         let z_m = Self::get_int_property_from_node(tile_child, "zM").unwrap_or(0);
 
-                        // info!("  Tile {}: tileset='{}', u='{}', no={}, pos=({},{}), z={}",
-                        //       tile_id, tileset, u, no, x, y, z_m);
+                        // Store tile data for later
+                        tile_data.push((tile_id, layer_num, tileset.clone(), u.clone(), no, x, y, z_m));
 
-                        // Load tile texture if tileset is specified
-                        let (texture, origin_x, origin_y) = if !tileset.is_empty() && !u.is_empty() {
-                            match tile_cache.get_or_load_tile(&tileset, &u, no).await {
-                                Some((tex, ox, oy)) => {
-                                    // info!("    Loaded tile texture: {}/{}/{}", tileset, u, no);
-                                    (Some(tex), ox, oy)
-                                }
-                                None => {
-                                    warn!("    Failed to load tile texture: {}/{}/{}", tileset, u, no);
-                                    (None, 0, 0)
-                                }
-                            }
-                        } else {
-                            (None, 0, 0)
-                        };
-
-                        let tile = Tile {
-                            id: tile_id,
-                            layer: layer_num,
-                            tileset: tileset.clone(),
-                            u,
-                            no,
-                            x,
-                            y,
-                            z_m,
-                            origin_x,
-                            origin_y,
-                            texture,
-                        };
-
-                        map_data.tiles.push(tile);
+                        // Collect unique tileset files and tile requests
+                        if !tileset.is_empty() && !u.is_empty() {
+                            unique_tilesets.insert(tileset.clone());
+                            tile_requests.push((tileset.clone(), u.clone(), no));
+                        }
                     }
                 }
             }
+        }
+
+        // SECOND PASS: Batch preload all unique tileset WZ files
+        // First, batch fetch all the WZ files
+        info!("Batch fetching {} unique tileset files...", unique_tilesets.len());
+        let tilesets_vec: Vec<String> = unique_tilesets.iter().cloned().collect();
+        let mut fetch_requests = Vec::new();
+        for tileset in &tilesets_vec {
+            let url = format!(
+                "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Tile/{}.img",
+                tileset
+            );
+            let cache_name = format!("/01/Map/Tile/{}.img", tileset);
+            fetch_requests.push((url, cache_name));
+        }
+        
+        // Fetch all in parallel
+        let fetch_results = AssetManager::fetch_and_cache_batch(fetch_requests).await;
+
+        // Now parse all the fetched files (sequentially but from cache)
+        info!("Parsing {} tileset files...", tilesets_vec.len());
+        for (i, tileset) in tilesets_vec.iter().enumerate() {
+            if let Ok(bytes) = &fetch_results[i] {
+                // Parse and cache the WZ node
+                if let Err(e) = tile_cache.preload_tileset_from_bytes(tileset, bytes.clone()).await {
+                    warn!("Failed to parse tileset {}: {}", tileset, e);
+                }
+            }
+        }
+
+        info!("Preloaded tileset files");
+
+        // THIRD PASS: Now load textures (WZ files should be cached) and create tiles
+        info!("Loading {} individual tile textures...", tile_requests.len());
+        for (tile_id, layer_num, tileset, u, no, x, y, z_m) in tile_data {
+            // Load tile texture if tileset is specified
+            let (texture, origin_x, origin_y) = if !tileset.is_empty() && !u.is_empty() {
+                match tile_cache.get_or_load_tile(&tileset, &u, no).await {
+                    Some((tex, ox, oy)) => {
+                        (Some(tex), ox, oy)
+                    }
+                    None => {
+                        warn!("    Failed to load tile texture: {}/{}/{}", tileset, u, no);
+                        (None, 0, 0)
+                    }
+                }
+            } else {
+                (None, 0, 0)
+            };
+
+            let tile = Tile {
+                id: tile_id,
+                layer: layer_num,
+                tileset: tileset.clone(),
+                u,
+                no,
+                x,
+                y,
+                z_m,
+                origin_x,
+                origin_y,
+                texture,
+            };
+
+            map_data.tiles.push(tile);
         }
 
         Ok(())
@@ -509,6 +629,11 @@ impl MapLoader {
     async fn parse_objects(root_node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
         let root_read = root_node.read().unwrap();
         let mut object_cache = ObjectCache::new();
+
+        // FIRST PASS: Collect all unique object sets and object requests
+        use std::collections::HashSet;
+        let mut unique_object_sets: HashSet<String> = HashSet::new();
+        let mut object_data: Vec<(i32, i32, String, String, String, String, i32, i32, i32, i32, bool, i32)> = Vec::new();
 
         // Iterate through all children looking for numbered layers
         for (layer_name, layer_child) in root_read.children.iter() {
@@ -538,47 +663,82 @@ impl MapLoader {
                         let f = Self::get_int_property_from_node(obj_child, "f").unwrap_or(0) == 1;
                         let r = Self::get_int_property_from_node(obj_child, "r").unwrap_or(0);
 
-                        info!("  Object {}: oS='{}', l0='{}', l1='{}', l2='{}', pos=({},{}), z={}, zM={}",
-                              obj_id, oS, l0, l1, l2, x, y, z, z_m);
+                        // Store object data for later
+                        object_data.push((obj_id, layer_num, oS.clone(), l0.clone(), l1.clone(), l2.clone(), x, y, z, z_m, f, r));
 
-                        // Load object texture if object set is specified
-                        let (texture, origin_x, origin_y) = if !oS.is_empty() && !l0.is_empty() {
-                            match object_cache.get_or_load_object(&oS, &l0, &l1, &l2).await {
-                                Some((tex, ox, oy)) => {
-                                    info!("    Loaded object texture: {}/{}/{}/{}", oS, l0, l1, l2);
-                                    (Some(tex), ox, oy)
-                                }
-                                None => {
-                                    warn!("    Failed to load object texture: {}/{}/{}/{}", oS, l0, l1, l2);
-                                    (None, 0, 0)
-                                }
-                            }
-                        } else {
-                            (None, 0, 0)
-                        };
-
-                        let object = MapObject {
-                            id: obj_id,
-                            layer: layer_num,
-                            oS,
-                            l0,
-                            l1,
-                            l2,
-                            x,
-                            y,
-                            z,
-                            z_m,
-                            f,
-                            r,
-                            origin_x,
-                            origin_y,
-                            texture,
-                        };
-
-                        map_data.objects.push(object);
+                        // Collect unique object sets
+                        if !oS.is_empty() {
+                            unique_object_sets.insert(oS);
+                        }
                     }
                 }
             }
+        }
+
+        // SECOND PASS: Batch fetch all unique object set WZ files
+        if !unique_object_sets.is_empty() {
+            info!("Batch fetching {} unique object set files...", unique_object_sets.len());
+            let object_sets_vec: Vec<String> = unique_object_sets.iter().cloned().collect();
+            let mut fetch_requests = Vec::new();
+            for oS in &object_sets_vec {
+                let url = format!(
+                    "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Obj/{}.img",
+                    oS
+                );
+                let cache_name = format!("/01/Map/Obj/{}.img", oS);
+                fetch_requests.push((url, cache_name));
+            }
+            
+            let fetch_results = AssetManager::fetch_and_cache_batch(fetch_requests).await;
+            
+            // Parse all the fetched files
+            info!("Parsing {} object set files...", object_sets_vec.len());
+            for (i, oS) in object_sets_vec.iter().enumerate() {
+                if let Ok(bytes) = &fetch_results[i] {
+                    if let Err(e) = object_cache.preload_object_set_from_bytes(oS, bytes.clone()).await {
+                        warn!("Failed to parse object set {}: {}", oS, e);
+                    }
+                }
+            }
+        }
+
+        // THIRD PASS: Now load textures (WZ files should be cached) and create objects
+        info!("Loading {} individual object textures...", object_data.len());
+        for (obj_id, layer_num, oS, l0, l1, l2, x, y, z, z_m, f, r) in object_data {
+            // Load object texture if object set is specified
+            let (texture, origin_x, origin_y) = if !oS.is_empty() && !l0.is_empty() {
+                match object_cache.get_or_load_object(&oS, &l0, &l1, &l2).await {
+                    Some((tex, ox, oy)) => {
+                        (Some(tex), ox, oy)
+                    }
+                    None => {
+                        warn!("    Failed to load object texture: {}/{}/{}/{}", oS, l0, l1, l2);
+                        (None, 0, 0)
+                    }
+                }
+            } else {
+                (None, 0, 0)
+            };
+
+            let object = MapObject {
+                id: obj_id,
+                layer: layer_num,
+                oS,
+                l0,
+                l1,
+                l2,
+                x,
+                y,
+                z,
+                z_m,
+                f,
+                r,
+                origin_x,
+                origin_y,
+                texture,
+            };
+
+            map_data.objects.push(object);
         }
 
         Ok(())

@@ -11,6 +11,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clipboard = "0.5"
+futures = "0.3"
 
 # GUI viewer dependencies
 eframe = "0.27"

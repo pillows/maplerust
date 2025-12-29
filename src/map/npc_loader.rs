@@ -7,7 +7,7 @@ use wz_reader::{WzImage, WzNode, WzNodeArc, WzObjectType, WzReader};
 
 /// Cache for loaded NPC textures and parsed WZ nodes
 pub struct NpcCache {
-    npcs: HashMap<String, Texture2D>,
+    npcs: HashMap<String, (Texture2D, i32, i32)>, // (texture, origin_x, origin_y)
     wz_nodes: HashMap<String, WzNodeArc>, // Cache parsed WZ IMG files
 }
 
@@ -19,6 +19,32 @@ impl NpcCache {
         }
     }
 
+    /// Preload an NPC WZ file from already-fetched bytes
+    pub async fn preload_npc_from_bytes(&mut self, npc_id: &str, bytes: Vec<u8>) -> Result<(), String> {
+        // Skip if already loaded
+        if self.wz_nodes.contains_key(npc_id) {
+            return Ok(());
+        }
+
+        let wz_iv = guess_iv_from_wz_img(&bytes)
+            .ok_or_else(|| "Unable to guess version from NPC file".to_string())?;
+
+        let byte_len = bytes.len();
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
+        let cache_name = format!("/01/Npc/{}.img", npc_id);
+        let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
+        let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
+        let node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
+
+        node.write()
+            .unwrap()
+            .parse(&node)
+            .map_err(|e| format!("Failed to parse NPC WZ: {:?}", e))?;
+
+        self.wz_nodes.insert(npc_id.to_string(), node);
+        Ok(())
+    }
+
     /// Get or load an NPC texture
     /// Returns: (texture, origin_x, origin_y)
     pub async fn get_or_load_npc(
@@ -27,19 +53,15 @@ impl NpcCache {
     ) -> Option<(Texture2D, i32, i32)> {
         let key = format!("{}/stand/0", npc_id);
 
-        // Return cached texture if available
-        if let Some(texture) = self.npcs.get(&key).cloned() {
-            // If cached, we need to get origin separately
-            match self.get_npc_origin_internal(npc_id).await {
-                Ok((ox, oy)) => return Some((texture, ox, oy)),
-                Err(_) => return Some((texture, 0, 0)),
-            }
+        // Return cached texture+origin if available
+        if let Some((texture, ox, oy)) = self.npcs.get(&key).cloned() {
+            return Some((texture, ox, oy));
         }
 
         // Load the NPC if not already loaded
         match self.load_npc_with_origin_cached(npc_id).await {
             Ok((texture, ox, oy)) => {
-                self.npcs.insert(key.clone(), texture.clone());
+                self.npcs.insert(key.clone(), (texture.clone(), ox, oy));
                 Some((texture, ox, oy))
             }
             Err(e) => {
@@ -163,66 +185,6 @@ impl NpcCache {
             }
             _ => Err("NPC node is not a PNG".to_string()),
         }
-    }
-
-    /// Internal helper to get NPC origin (reuses cached node if available)
-    async fn get_npc_origin_internal(
-        &mut self,
-        npc_id: &str,
-    ) -> Result<(i32, i32), String> {
-        // Check if we already have this WZ node cached
-        let root_node = if let Some(cached_node) = self.wz_nodes.get(npc_id) {
-            cached_node.clone()
-        } else {
-            let url = format!(
-                "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Npc/{}.img",
-                npc_id
-            );
-            let cache_name = format!("/01/Npc/{}.img", npc_id);
-
-            let bytes = AssetManager::fetch_and_cache(&url, &cache_name)
-                .await
-                .map_err(|e| format!("Failed to fetch NPC: {}", e))?;
-
-            let wz_iv = guess_iv_from_wz_img(&bytes)
-                .ok_or_else(|| "Unable to guess version from NPC file".to_string())?;
-
-            let byte_len = bytes.len();
-
-            let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
-            let cache_name_ref: wz_reader::WzNodeName = cache_name.clone().into();
-            let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
-            let node: WzNodeArc = WzNode::new(&cache_name.into(), wz_image, None).into();
-
-            node.write()
-                .unwrap()
-                .parse(&node)
-                .map_err(|e| format!("Failed to parse NPC WZ: {:?}", e))?;
-
-            // Cache the parsed node
-            self.wz_nodes.insert(npc_id.to_string(), node.clone());
-            node
-        };
-
-        // Try to find stand/0/origin
-        let paths_to_try = vec!["stand/0", "stand", "0/stand/0"];
-
-        for path in paths_to_try {
-            if let Ok(npc_node) = root_node.read().unwrap().at_path_parsed(path) {
-                let npc_read = npc_node.read().unwrap();
-                if let Ok(origin_node) = npc_read.at_path_parsed("origin") {
-                    let origin_read = origin_node.read().unwrap();
-                    match &origin_read.object_type {
-                        WzObjectType::Value(wz_reader::property::WzValue::Vector(vec)) => {
-                            return Ok((vec.0, vec.1));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        Ok((0, 0)) // Default origin
     }
 
     /// Get NPC name from String/NPC.img
