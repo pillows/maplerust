@@ -1,7 +1,7 @@
 use macroquad::prelude::*;
 use crate::character::CharacterData;
 use crate::flags::{self, DebugFlags};
-use crate::map::{MapData, MapLoader, MapRenderer};
+use crate::map::{MapData, MapLoader, MapRenderer, MobState, MobAI};
 use crate::map::portal_loader::PortalCache;
 use crate::game_world::bot_ai::BotAI;
 
@@ -21,6 +21,12 @@ pub struct GameplayState {
     current_map_id: String,
     target_portal_name: Option<String>, // Portal name to spawn at when entering new map
     bot_ai: BotAI, // Bot AI manager for mob movement
+    mob_states: Vec<MobState>,
+    on_ladder: bool,
+    current_ladder_id: Option<i32>,
+    drop_through_platform: bool, // True when jumping down through a platform
+    foothold_min_x: f32, // Cached foothold extent
+    foothold_max_x: f32,
     // Debug map loader
     map_input: String,
     map_input_active: bool,
@@ -52,6 +58,12 @@ impl GameplayState {
             loading_new_map: false,
             backspace_timer: 0.0,
             backspace_repeat_delay: 0.05, // Repeat every 50ms when held
+            mob_states: Vec::new(),
+            on_ladder: false,
+            current_ladder_id: None,
+            drop_through_platform: false,
+            foothold_min_x: 0.0,
+            foothold_max_x: 800.0,
         }
     }
 
@@ -80,8 +92,8 @@ impl GameplayState {
                 info!("Map loaded successfully!");
 
                 // Determine spawn position based on target portal or spawn point
-                let spawn_x;
-                let spawn_y;
+                let mut spawn_x;
+                let mut spawn_y;
 
                 // If we have a target portal name (entered through a portal), use that
                 // Otherwise, use the spawn portal (type 0)
@@ -119,6 +131,7 @@ impl GameplayState {
                 }
 
                 // Find the nearest foothold below the spawn point and place player on it
+                // Don't clamp spawn position - use the actual portal/spawn location
                 if let Some((foothold_y, _fh)) = map.find_foothold_below(spawn_x, spawn_y) {
                     self.player_x = spawn_x;
                     self.player_y = foothold_y - 30.0; // Subtract player height offset
@@ -137,9 +150,36 @@ impl GameplayState {
                 // Initialize bot AI from map data
                 self.bot_ai.initialize_from_map(&map);
 
+                // Save viewport bounds before moving map
+                let vr_left = map.info.vr_left as f32;
+                let vr_right = map.info.vr_right as f32;
+                let vr_top = map.info.vr_top as f32;
+                let vr_bottom = map.info.vr_bottom as f32;
+
+                // Calculate and cache foothold extent
+                self.foothold_min_x = vr_left;
+                self.foothold_max_x = vr_right;
+                for fh in &map.footholds {
+                    self.foothold_min_x = self.foothold_min_x.min(fh.x1.min(fh.x2) as f32);
+                    self.foothold_max_x = self.foothold_max_x.max(fh.x1.max(fh.x2) as f32);
+                }
+                info!("Foothold extent: {} to {} (viewport: {} to {})",
+                      self.foothold_min_x, self.foothold_max_x, vr_left, vr_right);
+
                 self.current_map_id = map_id.to_string();
                 self.map_data = Some(map);
                 self.loading_new_map = false;
+
+                // Initialize camera position - center on player but clamp to foothold extent
+                let target_camera_x = self.player_x - screen_width() / 2.0;
+                let target_camera_y = self.player_y - screen_height() / 2.0;
+
+                self.camera_x = target_camera_x
+                    .max(self.foothold_min_x)
+                    .min(self.foothold_max_x - screen_width());
+                self.camera_y = target_camera_y
+                    .max(vr_top)
+                    .min(vr_bottom - screen_height());
 
                 // Clear target portal name after successful spawn
                 self.target_portal_name = None;
@@ -289,11 +329,15 @@ impl GameplayState {
 
         let map = self.map_data.as_ref().unwrap();
 
+        // Spacebar free-roam mode (no collision or gravity, full 2D movement)
+        let free_roam = is_key_down(KeyCode::Space);
+
         // Basic player movement with debug speed multiplier
-        let base_speed = 200.0;
+        let base_speed = if free_roam { 350.0 } else { 200.0 };
         let move_speed = DebugFlags::get_player_speed(base_speed);
 
-        // Horizontal movement
+        // Horizontal movement - no artificial boundaries
+        // Player movement is limited by footholds, not viewport bounds
         if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
             self.player_x -= move_speed * dt;
         }
@@ -301,8 +345,18 @@ impl GameplayState {
             self.player_x += move_speed * dt;
         }
 
-        // Portal interaction - Check if player is near a portal and presses Up
-        if is_key_pressed(KeyCode::Up) {
+        // Free-roam vertical movement (Space + Up/Down or W/S)
+        if free_roam {
+            if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+                self.player_y -= move_speed * dt;
+            }
+            if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
+                self.player_y += move_speed * dt;
+            }
+        }
+
+        // Portal interaction or ladder grab - Check if player is near a portal/ladder and presses Up
+        if is_key_pressed(KeyCode::Up) && !free_roam {
             // Find nearby portals (within 40 pixels)
             let nearby_portal = map.portals.iter().find(|portal| {
                 let dx = (portal.x - self.player_x as i32).abs();
@@ -333,95 +387,182 @@ impl GameplayState {
                 } else {
                     info!("Portal has no target map (tm = 999999999)");
                 }
+            } else {
+                // No portal activated, try to grab a nearby ladder/rope
+                let px = self.player_x as i32;
+                let py = self.player_y as i32;
+
+                // Find nearest ladder/rope within horizontal + vertical tolerance
+                if let Some(ladder) = map.ladders.iter().find(|lad| {
+                    let dx = (lad.x - px).abs();
+                    let min_y = lad.y1.min(lad.y2);
+                    let max_y = lad.y1.max(lad.y2);
+                    dx <= 15 && py >= min_y - 20 && py <= max_y + 20
+                }) {
+                    // Snap player to ladder X and enter ladder state
+                    self.player_x = ladder.x as f32;
+                    self.player_vy = 0.0;
+                    self.on_ladder = true;
+                    self.current_ladder_id = Some(ladder.id);
+                    self.on_ground = false;
+                    info!("Player grabbed ladder/rope id={} at x={}", ladder.id, ladder.x);
+                }
             }
         }
 
-        // Jumping with Alt/Option key
-        if (is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt)) && self.on_ground {
-            self.player_vy = -400.0; // Jump velocity
+        // Handle vertical movement / physics
+        if free_roam {
+            // Free roam: no gravity or collision
+            self.player_vy = 0.0;
             self.on_ground = false;
-        }
+            self.on_ladder = false;
+        } else if self.on_ladder {
+            // Climbing ladder/rope: move with Up/Down, no gravity
+            self.player_vy = 0.0;
 
-        // Apply gravity
-        if !flags::ENABLE_COLLISION || !flags::GOD_MODE {
-            let gravity = 800.0;
-            self.player_vy += gravity * dt;
-        }
+            // Find the current ladder
+            if let Some(ladder) = self.current_ladder_id.and_then(|id| {
+                map.ladders.iter().find(|lad| lad.id == id)
+            }) {
+                let climb_speed = 140.0;
 
-        // Update vertical position
-        self.player_y += self.player_vy * dt;
+                if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+                    self.player_y -= climb_speed * dt;
+                }
+                if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
+                    self.player_y += climb_speed * dt;
+                }
 
-        // Check collision with footholds
-        if flags::ENABLE_COLLISION {
-            if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y + 30.0) {
-                // Calculate Y on the foothold
-                let dx = fh.x2 - fh.x1;
-                let dy = fh.y2 - fh.y1;
-                let ix = self.player_x as i32;
+                // Clamp within ladder segment
+                let min_y = ladder.y1.min(ladder.y2) as f32;
+                let max_y = ladder.y1.max(ladder.y2) as f32;
+                self.player_y = self.player_y.max(min_y).min(max_y);
 
-                let fh_y = if dx != 0 {
-                    (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-                } else {
-                    fh.y1 as f32
-                };
-
-                // Snap player to foothold if falling through it
-                if self.player_y + 30.0 >= fh_y && self.player_vy >= 0.0 {
-                    self.player_y = fh_y - 30.0;
-                    self.player_vy = 0.0;
-                    self.on_ground = true;
-                } else {
+                // Jump (Option) to dismount
+                if is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt) {
+                    self.on_ladder = false;
+                    self.current_ladder_id = None;
+                    self.player_vy = -400.0;
                     self.on_ground = false;
                 }
+
+                // Move left/right to step off ladder
+                if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)
+                    || is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)
+                {
+                    self.on_ladder = false;
+                    self.current_ladder_id = None;
+                }
             } else {
-                self.on_ground = false;
+                // Ladder disappeared or not found; exit ladder state
+                self.on_ladder = false;
+                self.current_ladder_id = None;
             }
         } else {
-            // No collision - simple boundary check
-            if self.player_y > map.info.vr_bottom as f32 - 60.0 {
-                self.player_y = map.info.vr_bottom as f32 - 60.0;
-                self.player_vy = 0.0;
-                self.on_ground = true;
+            // Normal physics with gravity and foothold snapping
+
+            // Drop through platform with Alt/Option + Down
+            let down_pressed = is_key_down(KeyCode::Down) || is_key_down(KeyCode::S);
+            let jump_pressed = is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt);
+
+            if jump_pressed && down_pressed && self.on_ground {
+                // Drop through the current platform
+                self.drop_through_platform = true;
+                self.player_vy = 50.0; // Small downward velocity to start falling
+                self.on_ground = false;
+                info!("Player dropping through platform");
+            } else if jump_pressed && self.on_ground {
+                // Normal jump
+                self.player_vy = -400.0; // Jump velocity
+                self.on_ground = false;
+            }
+
+            // Apply gravity
+            if flags::ENABLE_COLLISION && !flags::GOD_MODE {
+                let gravity = 800.0;
+                self.player_vy += gravity * dt;
+            }
+
+            // Update vertical position
+            self.player_y += self.player_vy * dt;
+
+            // Check collision with footholds (only for vertical positioning, not horizontal limits)
+            if flags::ENABLE_COLLISION {
+                // Skip foothold collision when dropping through platform
+                if !self.drop_through_platform {
+                    // Try to find foothold at current position
+                    if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y + 30.0) {
+                        // Calculate Y on the foothold
+                        let dx = fh.x2 - fh.x1;
+                        let dy = fh.y2 - fh.y1;
+                        let ix = self.player_x as i32;
+
+                        let fh_y = if dx != 0 {
+                            (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                        } else {
+                            fh.y1 as f32
+                        };
+
+                        // Snap player to foothold if falling through it
+                        if self.player_y + 30.0 >= fh_y && self.player_vy >= 0.0 {
+                            self.player_y = fh_y - 30.0;
+                            self.player_vy = 0.0;
+                            self.on_ground = true;
+                        } else {
+                            self.on_ground = false;
+                        }
+                    } else {
+                        self.on_ground = false;
+                    }
+                } else {
+                    // While dropping through, keep falling
+                    self.on_ground = false;
+
+                    // Reset drop_through flag after falling a bit (30 pixels)
+                    // This allows collision with platforms below the original one
+                    if self.player_vy > 100.0 {
+                        self.drop_through_platform = false;
+                    }
+                }
+            } else {
+                // No collision mode - gravity still applies
+                self.on_ground = false;
             }
         }
 
-        // Clamp player to map bounds
-        self.player_x = self.player_x.max(map.info.vr_left as f32).min(map.info.vr_right as f32);
-        self.player_y = self.player_y.max(map.info.vr_top as f32).min(map.info.vr_bottom as f32);
+        // No horizontal clamping - footholds naturally define walkable area
+        // If you walk off a platform, you fall (and hit bottom boundary eventually)
+
+        // Bottom boundary - if player hits bottom, stop them and set on ground
+        if self.player_y >= map.info.vr_bottom as f32 {
+            self.player_y = map.info.vr_bottom as f32;
+            self.player_vy = 0.0;
+            self.on_ground = true;
+        }
+
+        // Top boundary
+        if self.player_y < map.info.vr_top as f32 {
+            self.player_y = map.info.vr_top as f32;
+        }
 
         // Update bot AI
         self.bot_ai.update(dt, map);
 
         // Camera follows player (unless in camera debug mode)
         if !flags::CAMERA_DEBUG_MODE {
-            let map_width = (map.info.vr_right - map.info.vr_left) as f32;
-            let map_height = (map.info.vr_bottom - map.info.vr_top) as f32;
-
             // Center camera on player
             let target_camera_x = self.player_x - screen_width() / 2.0;
             let target_camera_y = self.player_y - screen_height() / 2.0;
 
-            // For small maps, clamp camera to show the entire map centered
-            if map_width <= screen_width() {
-                // Map is narrower than screen - center it horizontally
-                self.camera_x = map.info.vr_left as f32 - (screen_width() - map_width) / 2.0;
-            } else {
-                // Map is wider than screen - follow player with clamping to map bounds
-                self.camera_x = target_camera_x
-                    .max(map.info.vr_left as f32)
-                    .min(map.info.vr_right as f32 - screen_width());
-            }
-
-            if map_height <= screen_height() {
-                // Map is shorter than screen - center it vertically
-                self.camera_y = map.info.vr_top as f32 - (screen_height() - map_height) / 2.0;
-            } else {
-                // Map is taller than screen - follow player with clamping to map bounds
-                self.camera_y = target_camera_y
-                    .max(map.info.vr_top as f32)
-                    .min(map.info.vr_bottom as f32 - screen_height());
-            }
-        } else {
+            // Clamp camera to foothold extent (not just viewport)
+            // This allows camera to follow player to actual platform edges
+            self.camera_x = target_camera_x
+                .max(self.foothold_min_x)
+                .min(self.foothold_max_x - screen_width());
+            self.camera_y = target_camera_y
+                .max(map.info.vr_top as f32)
+                .min(map.info.vr_bottom as f32 - screen_height());
+        } else{
             // Camera debug mode - move camera independently with arrow keys + Shift
             let camera_speed = 300.0;
             if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {

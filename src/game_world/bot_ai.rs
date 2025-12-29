@@ -20,10 +20,15 @@ pub struct BotState {
 
 impl BotState {
     pub fn new(life: &Life) -> Self {
+        // Adjust spawn position to account for origin offset
+        // The map coordinate is the reference point, but we need to position
+        // the mob so its feet are on the platform, not its anchor point
+        let adjusted_y = life.y as f32;
+
         Self {
             life_id: life.id.clone(),
             x: life.x as f32,
-            y: life.y as f32,
+            y: adjusted_y,
             vx: 0.0,
             vy: 0.0,
             on_ground: true,
@@ -56,7 +61,19 @@ impl BotAI {
         for life in &map.life {
             // Only create AI for mobs (type "m"), not NPCs (type "n")
             if life.life_type == "m" {
-                self.bot_states.push(BotState::new(life));
+                let mut bot = BotState::new(life);
+
+                // Find foothold below spawn point and place mob on it
+                // This ensures mobs spawn on platforms correctly
+                if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
+                    bot.y = foothold_y;
+                    bot.on_ground = true;
+                    info!("Placed mob {} on foothold at y={}", life.id, foothold_y);
+                } else {
+                    warn!("No foothold found below mob {} spawn point ({}, {})", life.id, bot.x, bot.y);
+                }
+
+                self.bot_states.push(bot);
             }
         }
 

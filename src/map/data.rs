@@ -143,9 +143,11 @@ pub struct Life {
     pub mob_time: i32,
     pub flip: bool,
     pub hide: bool,
-    pub origin_x: i32,     // Origin offset X
-    pub origin_y: i32,     // Origin offset Y
-    pub texture: Option<Texture2D>,
+    pub origin_x: i32,     // Origin offset X (for single texture)
+    pub origin_y: i32,     // Origin offset Y (for single texture)
+    pub texture: Option<Texture2D>, // Single texture (for NPCs or fallback)
+    pub textures: Vec<Texture2D>, // Animation frames (for mobs)
+    pub origins: Vec<(i32, i32)>,  // Origin offset for each frame (x, y)
 }
 
 /// Ladder or rope data
@@ -204,16 +206,22 @@ impl MapData {
     }
 
     /// Find foothold at position (for collision)
+    /// Returns the foothold that the point is closest to vertically, within reasonable horizontal range
+    /// Very lenient - allows movement anywhere, only snaps to footholds when actually on them
     pub fn find_foothold_at(&self, x: f32, y: f32) -> Option<&Foothold> {
         let ix = x as i32;
         let iy = y as i32;
 
+        let mut best_fh: Option<&Foothold> = None;
+        let mut best_distance = 150.0; // Very lenient tolerance - don't restrict movement
+
         for fh in &self.footholds {
-            // Check if point is within horizontal range
+            // Check if point is within horizontal range (with small margin)
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
 
-            if ix >= min_x && ix <= max_x {
+            // Small margin (5 pixels) to match actual platform edges better
+            if ix >= min_x - 5 && ix <= max_x + 5 {
                 // Calculate Y position on this foothold at the given X
                 let dx = fh.x2 - fh.x1;
                 let dy = fh.y2 - fh.y1;
@@ -224,17 +232,26 @@ impl MapData {
                     fh.y1
                 };
 
-                // Check if player is close to this foothold
-                if (iy - fh_y).abs() < 20 {
-                    return Some(fh);
+                // Check vertical distance (very lenient)
+                let vertical_distance = (iy as f32 - fh_y as f32).abs();
+                
+                // Accept any foothold that's reasonably close vertically
+                // This allows free horizontal movement, only constrains vertical position
+                if vertical_distance < best_distance {
+                    // Accept footholds below or slightly above (within 100px)
+                    if fh_y as f32 >= iy as f32 - 100.0 || vertical_distance < 100.0 {
+                        best_distance = vertical_distance;
+                        best_fh = Some(fh);
+                    }
                 }
             }
         }
 
-        None
+        best_fh
     }
 
-    /// Find the nearest foothold below a position (for spawning)
+    /// Find the nearest foothold below a position (for spawning/falling)
+    /// Very lenient - allows finding footholds even if slightly outside horizontal range
     pub fn find_foothold_below(&self, x: f32, y: f32) -> Option<(f32, &Foothold)> {
         let ix = x as i32;
         let iy = y as i32;
@@ -243,11 +260,12 @@ impl MapData {
         let mut closest_fh = None;
 
         for fh in &self.footholds {
-            // Check if point is within horizontal range
+            // Check if point is within horizontal range (with generous margin)
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
-
-            if ix >= min_x && ix <= max_x {
+            
+            // Very generous margin (100 pixels) - don't restrict movement
+            if ix >= min_x - 100 && ix <= max_x + 100 {
                 // Calculate Y position on this foothold at the given X
                 let dx = fh.x2 - fh.x1;
                 let dy = fh.y2 - fh.y1;
@@ -258,7 +276,7 @@ impl MapData {
                     fh.y1
                 };
 
-                // Only consider footholds below the spawn point
+                // Only consider footholds below the position
                 if fh_y >= iy {
                     // Find the closest one
                     if closest_y.is_none() || fh_y < closest_y.unwrap() {

@@ -134,7 +134,13 @@ impl MapLoader {
 
         // Parse footholds
         if let Ok(fh_node) = root_node.read().unwrap().at_path_parsed("foothold") {
+            // Ensure foothold node is fully parsed
+            fh_node.write().unwrap().parse(&fh_node)
+                .map_err(|e| format!("Failed to parse foothold node: {:?}", e))?;
             Self::parse_footholds(&fh_node, &mut map_data)?;
+            info!("Parsed {} footholds", map_data.footholds.len());
+        } else {
+            warn!("No foothold node found in map");
         }
 
         // Parse portals
@@ -335,16 +341,32 @@ impl MapLoader {
     fn parse_footholds(node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
         let node_read = node.read().unwrap();
 
+        info!("Parsing footholds...");
+        let mut total_footholds = 0;
+
         // Footholds are organized as: foothold -> layer -> group -> individual footholds
         for (_layer_name, layer_child) in node_read.children.iter() {
+            // Parse layer node to ensure children are loaded
+            layer_child.write().unwrap().parse(layer_child)
+                .map_err(|e| format!("Failed to parse foothold layer: {:?}", e))?;
+            
             let layer_read = layer_child.read().unwrap();
             let layer_num = layer_read.name.parse::<i32>().unwrap_or(0);
+            let mut layer_count = 0;
 
             for (_group_name, group_child) in layer_read.children.iter() {
+                // Parse group node to ensure children are loaded
+                group_child.write().unwrap().parse(group_child)
+                    .map_err(|e| format!("Failed to parse foothold group: {:?}", e))?;
+                
                 let group_read = group_child.read().unwrap();
                 let group_num = group_read.name.parse::<i32>().unwrap_or(0);
 
                 for (_fh_name, fh_child) in group_read.children.iter() {
+                    // Parse individual foothold node
+                    fh_child.write().unwrap().parse(fh_child)
+                        .map_err(|e| format!("Failed to parse foothold: {:?}", e))?;
+                    
                     let fh_read = fh_child.read().unwrap();
                     let fh_id = fh_read.name.parse::<i32>().unwrap_or(0);
 
@@ -363,11 +385,21 @@ impl MapLoader {
                         piece: Self::get_int_property_from_node(fh_child, "piece").unwrap_or(0),
                     };
 
-                    map_data.footholds.push(foothold);
+                    // Only add footholds with valid coordinates
+                    if foothold.x1 != 0 || foothold.x2 != 0 || foothold.y1 != 0 || foothold.y2 != 0 {
+                        map_data.footholds.push(foothold);
+                        layer_count += 1;
+                        total_footholds += 1;
+                    }
                 }
+            }
+            
+            if layer_count > 0 {
+                info!("  Layer {}: {} footholds", layer_num, layer_count);
             }
         }
 
+        info!("Total footholds parsed: {}", total_footholds);
         Ok(())
     }
 
@@ -562,36 +594,60 @@ impl MapLoader {
             info!("  Life: id='{}', type='{}', pos=({},{})", life_entry.id, life_entry.life_type, life_entry.x, life_entry.y);
 
             // Load name and texture based on life type
-            let (name, texture, origin_x, origin_y) = if life_entry.life_type == "n" && !life_entry.id.is_empty() {
+            let (name, texture, origin_x, origin_y, mob_textures, mob_origins) = if life_entry.life_type == "n" && !life_entry.id.is_empty() {
                 // Load NPC
                 let npc_name = NpcCache::get_npc_name(&life_entry.id).await.unwrap_or_default();
 
                 match npc_cache.get_or_load_npc(&life_entry.id).await {
                     Some((tex, ox, oy)) => {
                         info!("    Loaded NPC: {} ({})", npc_name, life_entry.id);
-                        (npc_name, Some(tex), ox, oy)
+                        (npc_name, Some(tex), ox, oy, Vec::new(), Vec::new())
                     }
                     None => {
                         warn!("    Failed to load NPC texture: {} ({})", npc_name, life_entry.id);
-                        (npc_name, None, 0, 0)
+                        (npc_name, None, 0, 0, Vec::new(), Vec::new())
                     }
                 }
             } else if life_entry.life_type == "m" && !life_entry.id.is_empty() {
-                // Load Mob
+                // Load Mob - try to load move frames first, fallback to single texture
                 let mob_name = MobCache::get_mob_name(&life_entry.id).await.unwrap_or_default();
 
-                match mob_cache.get_or_load_mob(&life_entry.id).await {
-                    Some((tex, ox, oy)) => {
-                        info!("    Loaded Mob: {} ({})", mob_name, life_entry.id);
-                        (mob_name, Some(tex), ox, oy)
+                // Try to load move animation frames
+                if let Some((textures, origins)) = mob_cache.get_or_load_mob_move_frames(&life_entry.id).await {
+                    if !textures.is_empty() {
+                        info!("    Loaded Mob with {} move frames: {} ({})", textures.len(), mob_name, life_entry.id);
+                        // Use first frame as fallback texture
+                        let first_tex = textures[0].clone();
+                        let (first_ox, first_oy) = origins[0];
+                        (mob_name, Some(first_tex), first_ox, first_oy, textures, origins)
+                    } else {
+                        // Fallback to single texture
+                        match mob_cache.get_or_load_mob(&life_entry.id).await {
+                            Some((tex, ox, oy)) => {
+                                info!("    Loaded Mob: {} ({})", mob_name, life_entry.id);
+                                (mob_name, Some(tex), ox, oy, Vec::new(), Vec::new())
+                            }
+                            None => {
+                                warn!("    Failed to load Mob texture: {} ({})", mob_name, life_entry.id);
+                                (mob_name, None, 0, 0, Vec::new(), Vec::new())
+                            }
+                        }
                     }
-                    None => {
-                        warn!("    Failed to load Mob texture: {} ({})", mob_name, life_entry.id);
-                        (mob_name, None, 0, 0)
+                } else {
+                    // Fallback to single texture if move frames not available
+                    match mob_cache.get_or_load_mob(&life_entry.id).await {
+                        Some((tex, ox, oy)) => {
+                            info!("    Loaded Mob: {} ({})", mob_name, life_entry.id);
+                            (mob_name, Some(tex), ox, oy, Vec::new(), Vec::new())
+                        }
+                        None => {
+                            warn!("    Failed to load Mob texture: {} ({})", mob_name, life_entry.id);
+                            (mob_name, None, 0, 0, Vec::new(), Vec::new())
+                        }
                     }
                 }
             } else {
-                (String::new(), None, 0, 0)
+                (String::new(), None, 0, 0, Vec::new(), Vec::new())
             };
 
             // Adjust y position to place life entity on the nearest foothold below
@@ -621,6 +677,8 @@ impl MapLoader {
                 origin_x,
                 origin_y,
                 texture,
+                textures: mob_textures,
+                origins: mob_origins,
             };
 
             map_data.life.push(life);

@@ -6,7 +6,9 @@ pub mod object_loader;
 pub mod npc_loader;
 pub mod mob_loader;
 pub mod portal_loader;
+pub mod mob_ai;
 
 pub use data::*;
 pub use loader::MapLoader;
 pub use renderer::MapRenderer;
+pub use mob_ai::{MobState, MobAI};

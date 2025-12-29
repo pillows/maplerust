@@ -71,6 +71,48 @@ impl MobCache {
         }
     }
 
+    /// Get or load all move animation frames for a Mob
+    /// Returns: (textures, origins) - vectors of textures and their origin offsets
+    pub async fn get_or_load_mob_move_frames(
+        &mut self,
+        mob_id: &str,
+    ) -> Option<(Vec<Texture2D>, Vec<(i32, i32)>)> {
+        info!("Loading move frames for Mob: {}", mob_id);
+
+        // Reuse generic WZ animation loader that also handles origins.
+        // This is the same mechanism used for logo and portal animations,
+        // so it's well-tested and safe in WASM.
+        let url = format!(
+            "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Mob/{}.img",
+            mob_id
+        );
+        let cache_name = format!("/01/Mob/{}.img", mob_id);
+
+        // Mob structure: root -> move -> [0, 1, 2, ...]
+        let frames = AssetManager::load_animation_frames_with_origins(
+            &url,
+            &cache_name,
+            "move",
+        )
+        .await;
+
+        if frames.is_empty() {
+            info!("  No move frames found for Mob {}", mob_id);
+            return None;
+        }
+
+        let mut textures = Vec::with_capacity(frames.len());
+        let mut origins = Vec::with_capacity(frames.len());
+
+        for frame in frames {
+            textures.push(frame.texture);
+            origins.push((frame.origin.x as i32, frame.origin.y as i32));
+        }
+
+        info!("  Loaded {} move frames for Mob {}", textures.len(), mob_id);
+        Some((textures, origins))
+    }
+
     /// Load a specific Mob with origin (using cached WZ nodes)
     /// Returns: (texture, origin_x, origin_y)
     async fn load_mob_with_origin_cached(
