@@ -273,10 +273,11 @@ pub async fn run() {
 
                 // Run gameplay
                 state.update(dt);
+                
+                // Handle BGM playback (async)
+                state.handle_bgm().await;
+                
                 state.draw();
-
-                // Audio is handled directly in GameplayState::update()
-                // No need to check here
 
                 // Check if we should load a new map
                 if let Some(map_id) = state.should_load_new_map() {

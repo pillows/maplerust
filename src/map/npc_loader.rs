@@ -125,7 +125,10 @@ impl NpcCache {
         let paths_to_try = vec![
             "stand/0",
             "stand",
+            "default/0",
+            "default",
             "0/stand/0",
+            "0",
         ];
 
         let mut npc_node = None;
@@ -138,7 +141,32 @@ impl NpcCache {
             }
         }
 
-        let npc_node = npc_node.ok_or_else(|| "NPC stand animation not found".to_string())?;
+        // If still not found, try to find the first available animation frame
+        if npc_node.is_none() {
+            info!("  No standard paths found, searching for first available frame...");
+            let root_read = root_node.read().unwrap();
+            // Look for any child that might be an animation directory
+            for (child_name, child_node) in root_read.children.iter() {
+                let child_read = child_node.read().unwrap();
+                // Check if this child has a "0" frame (common animation structure)
+                if let Ok(frame_node) = child_read.at_path_parsed("0") {
+                    npc_node = Some(frame_node);
+                    info!("  Using fallback animation: {}/0", child_name.as_str());
+                    break;
+                }
+                // Or if the child itself is a PNG
+                if matches!(child_read.object_type, wz_reader::WzObjectType::Property(_)) {
+                    npc_node = Some(child_node.clone());
+                    info!("  Using fallback node: {}", child_name.as_str());
+                    break;
+                }
+            }
+        }
+
+        let npc_node = npc_node.ok_or_else(|| {
+            warn!("NPC {}: No suitable animation found (tried: stand/0, stand, default/0, default, 0/stand/0, 0, and first available)", npc_id);
+            "NPC animation not found".to_string()
+        })?;
 
         // Extract origin if available
         let npc_read = npc_node.read().unwrap();

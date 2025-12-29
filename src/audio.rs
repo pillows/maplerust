@@ -11,6 +11,10 @@ pub struct AudioManager {
     // Alternative Web Audio API playback (for Chrome compatibility)
     #[cfg(target_arch = "wasm32")]
     web_audio_context_id: Option<u32>, // ID for Web Audio API context
+    #[cfg(target_arch = "wasm32")]
+    pending_bgm: Option<(Vec<u8>, String)>, // Store pending BGM until user interaction
+    #[cfg(target_arch = "wasm32")]
+    audio_context_resumed: bool, // Track if AudioContext has been resumed
 }
 
 impl AudioManager {
@@ -21,7 +25,49 @@ impl AudioManager {
             current_bgm_name: String::new(),
             #[cfg(target_arch = "wasm32")]
             web_audio_context_id: None,
+            #[cfg(target_arch = "wasm32")]
+            pending_bgm: None,
+            #[cfg(target_arch = "wasm32")]
+            audio_context_resumed: false,
         }
+    }
+    
+    /// Resume audio context on first user interaction
+    /// This should be called when user interacts with the page (click, keypress, etc.)
+    #[cfg(target_arch = "wasm32")]
+    pub async fn resume_audio_context(&mut self) {
+        if !self.audio_context_resumed {
+            extern "C" {
+                fn web_audio_resume_context();
+            }
+            unsafe {
+                web_audio_resume_context();
+            }
+            self.audio_context_resumed = true;
+            info!("AudioContext resumed after user interaction");
+            
+            // Play any pending BGM
+            if let Some((sound_data, bgm_name)) = self.pending_bgm.take() {
+                info!("Playing pending BGM: {}", bgm_name);
+                // Update current_bgm_name BEFORE playing so it doesn't get stopped
+                self.current_bgm_name = bgm_name.clone();
+                match self.play_with_web_audio(&sound_data, &bgm_name).await {
+                    Ok(_) => {
+                        info!("  → Pending BGM playback started successfully");
+                    }
+                    Err(e) => {
+                        warn!("Failed to play pending BGM: {}", e);
+                        // Clear the name if playback failed
+                        self.current_bgm_name.clear();
+                    }
+                }
+            }
+        }
+    }
+    
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn resume_audio_context(&mut self) {
+        // No-op for non-WASM
     }
 
     /// Load and play BGM from map info
@@ -31,12 +77,28 @@ impl AudioManager {
         info!("play_bgm called with: '{}'", bgm);
 
         // Don't reload if it's the same BGM
-        if self.current_bgm_name == bgm && self.current_bgm.is_some() {
-            info!("BGM '{}' is already playing, skipping reload", bgm);
-            return;
+        if self.current_bgm_name == bgm {
+            #[cfg(target_arch = "wasm32")]
+            {
+                // If AudioContext was just resumed and we have pending BGM, play it
+                if self.audio_context_resumed && self.pending_bgm.is_some() {
+                    info!("AudioContext resumed, will play pending BGM");
+                } else if self.web_audio_context_id.is_some() {
+                    info!("BGM '{}' is already playing, skipping reload", bgm);
+                    return;
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if self.current_bgm.is_some() {
+                    info!("BGM '{}' is already playing, skipping reload", bgm);
+                    return;
+                }
+            }
         }
 
-        // Stop current BGM if any
+        // Stop current BGM if any (this will stop ALL Web Audio sources)
+        info!("play_bgm: Stopping any previous BGM before playing '{}'", bgm);
         self.stop_bgm();
 
         // Parse BGM string (format: "ImgName/TrackName")
@@ -61,27 +123,61 @@ impl AudioManager {
             Ok((sound, sound_data)) => {
                 info!("Sound loaded successfully, starting playback...");
                 
-                // Try macroquad audio first
-                audio::play_sound(
-                    &sound,
-                    audio::PlaySoundParams {
-                        looped: true,
-                        volume: 0.5, // Default volume at 50%
-                    },
-                );
-                
-                // Also try Web Audio API directly as fallback (for Chrome compatibility)
+                // Use Web Audio API directly (primary method for Chrome compatibility)
+                // Skip macroquad audio to avoid duplicate playback
                 #[cfg(target_arch = "wasm32")]
                 {
-                    if let Err(e) = self.play_with_web_audio(&sound_data, track_name).await {
-                        warn!("Web Audio API playback failed: {}", e);
-                    } else {
-                        info!("  → Web Audio API playback started as fallback");
+                    // Check if AudioContext has been resumed (user interaction required)
+                    if !self.audio_context_resumed {
+                        // Store pending BGM until user interaction
+                        info!("  → AudioContext not resumed yet, storing BGM for later playback");
+                        self.pending_bgm = Some((sound_data, bgm.to_string()));
+                        self.current_bgm = Some(sound);
+                        self.current_bgm_name = bgm.to_string();
+                        info!("  → BGM will play automatically after first user interaction");
+                        return;
+                    }
+                    
+                    // Use Web Audio API - it's more reliable in Chrome
+                    // Set current_bgm_name BEFORE playing to prevent it from being stopped
+                    self.current_bgm_name = bgm.to_string();
+                    match self.play_with_web_audio(&sound_data, track_name).await {
+                        Ok(_) => {
+                            info!("  → Web Audio API playback started successfully");
+                            self.current_bgm = Some(sound);
+                            self.current_bgm_name = bgm.to_string();
+                        }
+                        Err(e) => {
+                            warn!("Web Audio API playback failed: {}", e);
+                            // Fallback: try macroquad audio if Web Audio fails
+                            info!("  → Falling back to macroquad audio");
+                            audio::play_sound(
+                                &sound,
+                                audio::PlaySoundParams {
+                                    looped: true,
+                                    volume: 0.5,
+                                },
+                            );
+                            self.current_bgm = Some(sound);
+                            self.current_bgm_name = bgm.to_string();
+                        }
                     }
                 }
                 
-                self.current_bgm = Some(sound);
-                self.current_bgm_name = bgm.to_string();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // For non-WASM builds, use macroquad audio
+                    audio::play_sound(
+                        &sound,
+                        audio::PlaySoundParams {
+                            looped: true,
+                            volume: 0.5,
+                        },
+                    );
+                    self.current_bgm = Some(sound);
+                    self.current_bgm_name = bgm.to_string();
+                }
+                
                 info!("✓ BGM playback started: {}", bgm);
             }
             Err(e) => {
@@ -92,22 +188,38 @@ impl AudioManager {
 
     /// Stop the current BGM
     pub fn stop_bgm(&mut self) {
+        if self.current_bgm_name.is_empty() && self.current_bgm.is_none() {
+            info!("stop_bgm called but no BGM is currently playing");
+            return;
+        }
+
+        info!("stop_bgm: Stopping BGM '{}'", self.current_bgm_name);
+
+        // Stop macroquad audio
         if let Some(sound) = &self.current_bgm {
             audio::stop_sound(sound);
             self.current_bgm = None;
-            self.current_bgm_name.clear();
+            info!("  → Macroquad audio stopped");
         }
-        
-        // Also stop Web Audio API playback
+
+        // Stop Web Audio API playback - stop ALL sources
         #[cfg(target_arch = "wasm32")]
         {
             self.stop_web_audio();
+            // Clear pending BGM if any
+            if self.pending_bgm.is_some() {
+                info!("  → Cleared pending BGM");
+                self.pending_bgm = None;
+            }
         }
+
+        self.current_bgm_name.clear();
+        info!("  → BGM stopped completely");
     }
     
     /// Play sound using Web Audio API directly (Chrome compatibility)
     #[cfg(target_arch = "wasm32")]
-    async fn play_with_web_audio(&mut self, sound_data: &[u8], track_name: &str) -> Result<(), String> {
+    async fn play_with_web_audio(&mut self, sound_data: &[u8], _track_name: &str) -> Result<(), String> {
         extern "C" {
             fn web_audio_play(data_ptr: *const u8, data_len: u32, looped: u32, volume: f32) -> u32;
         }
@@ -116,18 +228,18 @@ impl AudioManager {
             let context_id = web_audio_play(
                 sound_data.as_ptr(),
                 sound_data.len() as u32,
-                1, // looped
-                0.5, // volume
+                1, // looped = true
+                0.5, // volume = 50%
             );
             
             if context_id != 0 {
                 self.web_audio_context_id = Some(context_id);
-                info!("  → Web Audio API playback started (context ID: {})", context_id);
+                info!("  → Web Audio API playback initiated (context ID: {})", context_id);
+                info!("  → Note: Audio will start after user interaction (browser autoplay policy)");
                 Ok(())
             } else {
-                // Return error but don't fail completely - macroquad audio might still work
                 warn!("  → Web Audio API playback failed to start (returned 0)");
-                Ok(()) // Don't fail - macroquad audio is primary
+                Err("Web Audio API returned 0".to_string())
             }
         }
     }
@@ -135,15 +247,16 @@ impl AudioManager {
     /// Stop Web Audio API playback
     #[cfg(target_arch = "wasm32")]
     fn stop_web_audio(&mut self) {
-        if let Some(context_id) = self.web_audio_context_id {
-            extern "C" {
-                fn web_audio_stop(context_id: u32);
-            }
-            unsafe {
-                web_audio_stop(context_id);
-            }
-            self.web_audio_context_id = None;
+        extern "C" {
+            fn web_audio_stop(context_id: u32);
         }
+        // Always stop ALL sources by passing 0 to ensure no audio leaks when changing maps
+        info!("  → Calling web_audio_stop(0) to stop ALL Web Audio sources");
+        unsafe {
+            web_audio_stop(0); // 0 means stop all sources
+        }
+        self.web_audio_context_id = None;
+        info!("  → All Web Audio sources stopped (web_audio_context_id cleared)");
     }
     
     #[cfg(not(target_arch = "wasm32"))]
@@ -254,12 +367,6 @@ impl AudioManager {
             buffer
         };
         info!("  → Sound data extracted: {} bytes", sound_data.len());
-
-        // Auto-download MP3 file for debugging (WASM only)
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self::download_mp3_for_debug(&sound_data, track_name).await;
-        }
 
         Ok(sound_data)
     }

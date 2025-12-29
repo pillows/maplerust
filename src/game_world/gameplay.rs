@@ -4,6 +4,7 @@ use crate::flags::{self, DebugFlags};
 use crate::map::{MapData, MapLoader, MapRenderer, MobState, MobAI};
 use crate::map::portal_loader::PortalCache;
 use crate::game_world::bot_ai::BotAI;
+use crate::audio::AudioManager;
 
 /// Gameplay state for when the player is in the game world
 pub struct GameplayState {
@@ -27,6 +28,10 @@ pub struct GameplayState {
     drop_through_platform: bool, // True when jumping down through a platform
     foothold_min_x: f32, // Cached foothold extent
     foothold_max_x: f32,
+    // Audio manager
+    audio_manager: AudioManager,
+    // BGM playback tracking
+    bgm_pending: bool,
     // Debug map loader
     map_input: String,
     map_input_active: bool,
@@ -42,6 +47,7 @@ pub struct GameplayState {
 }
 
 impl GameplayState {
+    /// Create a new gameplay state
     pub fn new(character: CharacterData) -> Self {
         info!("Starting game with character: {}", character.name);
         Self {
@@ -59,21 +65,23 @@ impl GameplayState {
             current_map_id: "100010000".to_string(), // Default starting map
             target_portal_name: None, // No target portal on initial spawn
             bot_ai: BotAI::new(),
-            map_input: String::new(),
-            map_input_active: false,
-            loading_new_map: false,
-            backspace_timer: 0.0,
-            backspace_repeat_delay: 0.05, // Repeat every 50ms when held
             mob_states: Vec::new(),
-            last_npc_click_time: -1.0,
-            last_npc_click_id: None,
-            window_focused: true,
-            last_dt: 0.016, // Default to ~60fps
             on_ladder: false,
             current_ladder_id: None,
             drop_through_platform: false,
             foothold_min_x: 0.0,
             foothold_max_x: 800.0,
+            audio_manager: AudioManager::new(),
+            bgm_pending: false,
+            map_input: String::new(),
+            map_input_active: false,
+            loading_new_map: false,
+            backspace_timer: 0.0,
+            backspace_repeat_delay: 0.05, // Repeat every 50ms when held
+            last_npc_click_time: -1.0,
+            last_npc_click_id: None,
+            window_focused: true,
+            last_dt: 0.016, // Default to ~60fps
         }
     }
 
@@ -176,9 +184,25 @@ impl GameplayState {
                 info!("Foothold extent: {} to {} (viewport: {} to {})",
                       self.foothold_min_x, self.foothold_max_x, vr_left, vr_right);
 
+                // Stop any currently playing BGM before loading new map
+                info!("Stopping previous map's BGM before loading new map");
+                self.audio_manager.stop_bgm();
+
+                // Store BGM name before moving map
+                let bgm_name = map.info.bgm.clone();
+
                 self.current_map_id = map_id.to_string();
                 self.map_data = Some(map);
                 self.loading_new_map = false;
+
+                // Set BGM pending flag for playback in update method
+                if !bgm_name.is_empty() {
+                    info!("New map loaded with BGM: '{}' (will play after user interaction)", bgm_name);
+                    self.bgm_pending = true;
+                } else {
+                    info!("New map loaded with no BGM");
+                    self.bgm_pending = false;
+                }
 
                 // Initialize camera position - center on player but clamp to foothold extent
                 let target_camera_x = self.player_x - screen_width() / 2.0;
@@ -221,6 +245,45 @@ impl GameplayState {
         }
     }
 
+    /// Handle BGM playback (async wrapper)
+    pub async fn handle_bgm(&mut self) {
+        // Resume audio context on first user interaction (required for browser autoplay policy)
+        #[cfg(target_arch = "wasm32")]
+        {
+            use macroquad::prelude::*;
+            // Check for any user interaction - check common keys and mouse buttons
+            let any_key_pressed = is_key_pressed(KeyCode::Space) ||
+                                  is_key_pressed(KeyCode::Enter) ||
+                                  is_key_pressed(KeyCode::Escape) ||
+                                  is_key_pressed(KeyCode::Left) ||
+                                  is_key_pressed(KeyCode::Right) ||
+                                  is_key_pressed(KeyCode::Up) ||
+                                  is_key_pressed(KeyCode::Down) ||
+                                  is_key_pressed(KeyCode::A) ||
+                                  is_key_pressed(KeyCode::D) ||
+                                  is_key_pressed(KeyCode::W) ||
+                                  is_key_pressed(KeyCode::S);
+            
+            let any_mouse_pressed = is_mouse_button_pressed(MouseButton::Left) || 
+                                    is_mouse_button_pressed(MouseButton::Right) || 
+                                    is_mouse_button_pressed(MouseButton::Middle);
+            
+            if any_key_pressed || any_mouse_pressed {
+                self.audio_manager.resume_audio_context().await;
+            }
+        }
+        
+        if self.bgm_pending {
+            if let Some(ref map) = self.map_data {
+                if !map.info.bgm.is_empty() {
+                    info!("Playing BGM: {}", map.info.bgm);
+                    self.audio_manager.play_bgm(&map.info.bgm).await;
+                }
+            }
+            self.bgm_pending = false;
+        }
+    }
+
     /// Update game logic
     pub fn update(&mut self, dt: f32) {
         // Handle window focus - prevent large dt values when tab is inactive
@@ -236,6 +299,31 @@ impl GameplayState {
         // Check window focus state (macroquad doesn't expose this directly, so we infer from dt)
         // If dt is reasonable, window is likely focused
         self.window_focused = dt < 0.1;
+        
+        // Resume audio context on first user interaction (any keypress or mouse click)
+        #[cfg(target_arch = "wasm32")]
+        {
+            use macroquad::prelude::*;
+            // Check for any user interaction - check common keys and mouse buttons
+            let any_key_pressed = is_key_pressed(KeyCode::Space) ||
+                                  is_key_pressed(KeyCode::Enter) ||
+                                  is_key_pressed(KeyCode::Escape) ||
+                                  is_key_pressed(KeyCode::Left) ||
+                                  is_key_pressed(KeyCode::Right) ||
+                                  is_key_pressed(KeyCode::Up) ||
+                                  is_key_pressed(KeyCode::Down) ||
+                                  is_key_pressed(KeyCode::A) ||
+                                  is_key_pressed(KeyCode::D) ||
+                                  is_key_pressed(KeyCode::W) ||
+                                  is_key_pressed(KeyCode::S);
+            
+            let any_mouse_pressed = is_mouse_button_pressed(MouseButton::Left) || 
+                                    is_mouse_button_pressed(MouseButton::Right);
+            
+            if any_key_pressed || any_mouse_pressed {
+                // This will be handled asynchronously in handle_bgm
+            }
+        }
         // Portal textures are already loaded in each Portal structure during map parsing
 
         // Handle debug map input toggle with M key
@@ -423,7 +511,10 @@ impl GameplayState {
                                (current_time - self.last_npc_click_time) < double_click_threshold {
                                 // Double-click detected!
                                 info!("NPC interaction created: {} (ID: {})", life.name, life.id);
-                                info!("NPC interaction created: {} (ID: {})", life.name, life.id);
+                                // Reset click tracking to prevent triple-clicks from triggering again
+                                self.last_npc_click_time = -1.0;
+                                self.last_npc_click_id = None;
+                                break; // Exit immediately after double-click
                             }
                         }
                         
