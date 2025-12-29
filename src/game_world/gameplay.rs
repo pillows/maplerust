@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 use crate::character::CharacterData;
 use crate::flags::{self, DebugFlags};
 use crate::map::{MapData, MapLoader, MapRenderer};
+use crate::map::portal_loader::PortalCache;
 
 /// Gameplay state for when the player is in the game world
 pub struct GameplayState {
@@ -15,7 +16,9 @@ pub struct GameplayState {
     loaded: bool,
     map_data: Option<MapData>,
     map_renderer: MapRenderer,
+    portal_cache: PortalCache,
     current_map_id: String,
+    target_portal_name: Option<String>, // Portal name to spawn at when entering new map
     // Debug map loader
     map_input: String,
     map_input_active: bool,
@@ -38,7 +41,9 @@ impl GameplayState {
             loaded: false,
             map_data: None,
             map_renderer: MapRenderer::new(),
-            current_map_id: "100000000".to_string(), // Default starting map
+            portal_cache: PortalCache::new(),
+            current_map_id: "100010000".to_string(), // Default starting map
+            target_portal_name: None, // No target portal on initial spawn
             map_input: String::new(),
             map_input_active: false,
             loading_new_map: false,
@@ -54,6 +59,10 @@ impl GameplayState {
         // Load font for NPC names
         self.map_renderer.load_font().await;
 
+        // Portal textures are now loaded during map parsing
+        // Each portal has its own textures embedded in the Portal structure
+
+        // Load map
         self.load_map(&self.current_map_id.clone()).await;
         self.loaded = true;
         info!("Gameplay assets loaded successfully");
@@ -67,21 +76,67 @@ impl GameplayState {
             Ok(map) => {
                 info!("Map loaded successfully!");
 
-                // Find spawn portal (portal type 0) to position player
-                if let Some(spawn_portal) = map.portals.iter().find(|p| p.pt == 0) {
-                    self.player_x = spawn_portal.x as f32;
-                    self.player_y = spawn_portal.y as f32;
-                    info!("Player spawned at portal: ({}, {})", self.player_x, self.player_y);
+                // Determine spawn position based on target portal or spawn point
+                let spawn_x;
+                let spawn_y;
+
+                // If we have a target portal name (entered through a portal), use that
+                // Otherwise, use the spawn portal (type 0)
+                if let Some(ref target_portal_name) = self.target_portal_name {
+                    // Find portal by name
+                    if let Some(portal) = map.portals.iter().find(|p| p.pn == *target_portal_name) {
+                        spawn_x = portal.x as f32;
+                        spawn_y = portal.y as f32;
+                        info!("Found target portal '{}' at: ({}, {})", target_portal_name, spawn_x, spawn_y);
+                    } else {
+                        // Fallback to spawn portal if target not found
+                        warn!("Target portal '{}' not found, using spawn portal", target_portal_name);
+                        if let Some(spawn_portal) = map.portals.iter().find(|p| p.pt == 0) {
+                            spawn_x = spawn_portal.x as f32;
+                            spawn_y = spawn_portal.y as f32;
+                            info!("Found spawn portal at: ({}, {})", spawn_x, spawn_y);
+                        } else {
+                            spawn_x = ((map.info.vr_left + map.info.vr_right) / 2) as f32;
+                            spawn_y = map.info.vr_top as f32 + 100.0;
+                            info!("No spawn portal found, using default position: ({}, {})", spawn_x, spawn_y);
+                        }
+                    }
                 } else {
-                    // Default spawn position in center of map
-                    self.player_x = ((map.info.vr_left + map.info.vr_right) / 2) as f32;
-                    self.player_y = map.info.vr_top as f32 + 100.0;
-                    info!("No spawn portal found, using default position");
+                    // No target portal, use spawn portal (initial map load or debug map change)
+                    if let Some(spawn_portal) = map.portals.iter().find(|p| p.pt == 0) {
+                        spawn_x = spawn_portal.x as f32;
+                        spawn_y = spawn_portal.y as f32;
+                        info!("Found spawn portal at: ({}, {})", spawn_x, spawn_y);
+                    } else {
+                        // Default spawn position in center of map
+                        spawn_x = ((map.info.vr_left + map.info.vr_right) / 2) as f32;
+                        spawn_y = map.info.vr_top as f32 + 100.0;
+                        info!("No spawn portal found, using default position: ({}, {})", spawn_x, spawn_y);
+                    }
+                }
+
+                // Find the nearest foothold below the spawn point and place player on it
+                if let Some((foothold_y, _fh)) = map.find_foothold_below(spawn_x, spawn_y) {
+                    self.player_x = spawn_x;
+                    self.player_y = foothold_y - 30.0; // Subtract player height offset
+                    self.player_vy = 0.0;
+                    self.on_ground = true;
+                    info!("Player placed on foothold at: ({}, {})", self.player_x, self.player_y);
+                } else {
+                    // No foothold found, use spawn position directly
+                    self.player_x = spawn_x;
+                    self.player_y = spawn_y;
+                    self.player_vy = 0.0;
+                    self.on_ground = false;
+                    warn!("No foothold found below spawn point, player may fall");
                 }
 
                 self.current_map_id = map_id.to_string();
                 self.map_data = Some(map);
                 self.loading_new_map = false;
+
+                // Clear target portal name after successful spawn
+                self.target_portal_name = None;
             }
             Err(e) => {
                 error!("Failed to load map {}: {}", map_id, e);
@@ -112,6 +167,8 @@ impl GameplayState {
 
     /// Update game logic
     pub fn update(&mut self, dt: f32) {
+        // Portal textures are already loaded in each Portal structure during map parsing
+
         // Handle debug map input toggle with M key
         if DebugFlags::should_show_debug_ui() && is_key_pressed(KeyCode::M) {
             if self.map_input_active {
@@ -119,6 +176,8 @@ impl GameplayState {
                 if !self.map_input.is_empty() {
                     self.loading_new_map = true;
                     self.map_input_active = false;
+                    // Clear target portal for debug map loading (use spawn portal)
+                    self.target_portal_name = None;
                 } else {
                     // Just close if empty
                     self.map_input_active = false;
@@ -236,8 +295,43 @@ impl GameplayState {
             self.player_x += move_speed * dt;
         }
 
-        // Jumping
-        if (is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Up) || is_key_pressed(KeyCode::W)) && self.on_ground {
+        // Portal interaction - Check if player is near a portal and presses Up
+        if is_key_pressed(KeyCode::Up) {
+            // Find nearby portals (within 40 pixels)
+            let nearby_portal = map.portals.iter().find(|portal| {
+                let dx = (portal.x - self.player_x as i32).abs();
+                let dy = (portal.y - self.player_y as i32).abs();
+                dx <= 40 && dy <= 40 && portal.pt != 0 // Not spawn points
+            });
+
+            if let Some(portal) = nearby_portal {
+                // Portal found - trigger map change
+                info!("Player activated portal: '{}' -> map {} portal '{}'",
+                      portal.pn, portal.tm, portal.tn);
+
+                // Only teleport if target map is valid (not 999999999)
+                if portal.tm != 999999999 {
+                    let target_map_id = format!("{:09}", portal.tm);
+                    let target_portal_name = portal.tn.clone();
+                    info!("Teleporting to map: {} at portal '{}'", target_map_id, target_portal_name);
+
+                    // Set target portal name for spawning in the new map
+                    self.target_portal_name = if !target_portal_name.is_empty() {
+                        Some(target_portal_name)
+                    } else {
+                        None // Use spawn portal if no target portal specified
+                    };
+
+                    self.loading_new_map = true;
+                    self.map_input = target_map_id;
+                } else {
+                    info!("Portal has no target map (tm = 999999999)");
+                }
+            }
+        }
+
+        // Jumping with Alt/Option key
+        if (is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt)) && self.on_ground {
             self.player_vy = -400.0; // Jump velocity
             self.on_ground = false;
         }
@@ -294,15 +388,26 @@ impl GameplayState {
             let map_width = (map.info.vr_right - map.info.vr_left) as f32;
             let map_height = (map.info.vr_bottom - map.info.vr_top) as f32;
 
-            // Center on player
-            self.camera_x = self.player_x - screen_width() / 2.0;
-            self.camera_y = self.player_y - screen_height() / 2.0;
+            // For small maps, center the map on screen instead of following player
+            if map_width <= screen_width() {
+                // Map is narrower than screen - center it horizontally
+                self.camera_x = map.info.vr_left as f32 - (screen_width() - map_width) / 2.0;
+            } else {
+                // Map is wider than screen - follow player with clamping
+                self.camera_x = self.player_x - screen_width() / 2.0;
+                self.camera_x = self.camera_x.max(map.info.vr_left as f32)
+                    .min(map.info.vr_right as f32 - screen_width());
+            }
 
-            // Clamp camera to map bounds
-            self.camera_x = self.camera_x.max(map.info.vr_left as f32)
-                .min((map.info.vr_right as f32 - screen_width()).max(map.info.vr_left as f32));
-            self.camera_y = self.camera_y.max(map.info.vr_top as f32)
-                .min((map.info.vr_bottom as f32 - screen_height()).max(map.info.vr_top as f32));
+            if map_height <= screen_height() {
+                // Map is shorter than screen - center it vertically
+                self.camera_y = map.info.vr_top as f32 - (screen_height() - map_height) / 2.0;
+            } else {
+                // Map is taller than screen - follow player with clamping
+                self.camera_y = self.player_y - screen_height() / 2.0;
+                self.camera_y = self.camera_y.max(map.info.vr_top as f32)
+                    .min(map.info.vr_bottom as f32 - screen_height());
+            }
         } else {
             // Camera debug mode - move camera independently with arrow keys + Shift
             let camera_speed = 300.0;
@@ -360,6 +465,35 @@ impl GameplayState {
                     2.0,
                     YELLOW,
                 );
+            }
+
+            // Check if player is near a portal and show indicator
+            let nearby_portal = map.portals.iter().find(|portal| {
+                let dx = (portal.x - self.player_x as i32).abs();
+                let dy = (portal.y - self.player_y as i32).abs();
+                dx <= 40 && dy <= 40 && portal.pt != 0 && portal.tm != 999999999
+            });
+
+            if nearby_portal.is_some() {
+                // Draw "Press ↑ to enter" indicator above player
+                let indicator_text = "Press ↑";
+                let font_size = 14.0;
+                let text_dims = measure_text(indicator_text, None, font_size as u16, 1.0);
+                let text_x = player_screen_x - text_dims.width / 2.0;
+                let text_y = player_screen_y - 45.0;
+
+                // Draw background box
+                let padding = 4.0;
+                draw_rectangle(
+                    text_x - padding,
+                    text_y - text_dims.height - padding,
+                    text_dims.width + padding * 2.0,
+                    text_dims.height + padding * 2.0,
+                    Color::from_rgba(0, 0, 0, 200),
+                );
+
+                // Draw text
+                draw_text(indicator_text, text_x, text_y, font_size, YELLOW);
             }
 
             // Render map foregrounds (in front of player)
@@ -474,7 +608,7 @@ impl GameplayState {
         }
 
         // Controls hint at bottom
-        let mut controls_text = "Controls: Arrow Keys or WASD to move".to_string();
+        let mut controls_text = "Controls: A/D or ← → to move | Alt to jump | ↑ on portal to enter".to_string();
         if flags::CAMERA_DEBUG_MODE {
             controls_text.push_str(" | Shift+Arrows: Camera");
         }

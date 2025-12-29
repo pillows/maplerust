@@ -4,6 +4,7 @@ use crate::map::data::*;
 use crate::map::tile_loader::TileCache;
 use crate::map::object_loader::ObjectCache;
 use crate::map::npc_loader::NpcCache;
+use crate::map::mob_loader::MobCache;
 use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType};
@@ -37,6 +38,12 @@ impl MapLoader {
 
     /// Load a map from the given map ID
     pub async fn load_map(map_id: &str) -> Result<MapData, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        use std::time::Instant;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let total_start = Instant::now();
+
         info!("=== LOADING MAP: {} ===", map_id);
 
         // Break down the map ID and show its components
@@ -71,8 +78,14 @@ impl MapLoader {
         info!("  Full URL: {}", url);
 
         // Fetch and parse the map file
+        #[cfg(not(target_arch = "wasm32"))]
+        let fetch_start = Instant::now();
+
         let bytes = AssetManager::fetch_and_cache(&url, &cache_name).await
             .map_err(|e| format!("Failed to fetch map: {}", e))?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let fetch_time = fetch_start.elapsed();
 
         info!("Parsing map file (size: {} bytes)...", bytes.len());
 
@@ -109,9 +122,15 @@ impl MapLoader {
         }
 
         // Parse background layers
+        #[cfg(not(target_arch = "wasm32"))]
+        let bg_start = Instant::now();
+
         if let Ok(back_node) = root_node.read().unwrap().at_path_parsed("back") {
             Self::parse_backgrounds(&back_node, &mut map_data).await?;
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let bg_time = bg_start.elapsed();
 
         // Parse footholds
         if let Ok(fh_node) = root_node.read().unwrap().at_path_parsed("foothold") {
@@ -120,13 +139,19 @@ impl MapLoader {
 
         // Parse portals
         if let Ok(portal_node) = root_node.read().unwrap().at_path_parsed("portal") {
-            Self::parse_portals(&portal_node, &mut map_data)?;
+            Self::parse_portals(&portal_node, &mut map_data).await?;
         }
 
         // Parse life (NPCs/mobs)
+        #[cfg(not(target_arch = "wasm32"))]
+        let life_start = Instant::now();
+
         if let Ok(life_node) = root_node.read().unwrap().at_path_parsed("life") {
             Self::parse_life(&life_node, &mut map_data).await?;
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let life_time = life_start.elapsed();
 
         // Parse ladders/ropes
         if let Ok(ladder_node) = root_node.read().unwrap().at_path_parsed("ladderRope") {
@@ -134,10 +159,25 @@ impl MapLoader {
         }
 
         // Parse tiles from numbered layers
+        #[cfg(not(target_arch = "wasm32"))]
+        let tiles_start = Instant::now();
+
         Self::parse_tiles(&root_node, &mut map_data).await?;
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let tiles_time = tiles_start.elapsed();
+
         // Parse objects from numbered layers
+        #[cfg(not(target_arch = "wasm32"))]
+        let objects_start = Instant::now();
+
         Self::parse_objects(&root_node, &mut map_data).await?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let objects_time = objects_start.elapsed();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let total_time = total_start.elapsed();
 
         info!("=== MAP LOADED SUCCESSFULLY ===");
         info!("  Map ID: {}", map_id);
@@ -152,7 +192,24 @@ impl MapLoader {
         info!("  Map Bounds: ({}, {}) to ({}, {})",
               map_data.info.vr_left, map_data.info.vr_top,
               map_data.info.vr_right, map_data.info.vr_bottom);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            info!("--- Loading Time Breakdown ---");
+            info!("  Fetch map file: {:?}", fetch_time);
+            info!("  Backgrounds:    {:?}", bg_time);
+            info!("  Life (NPCs):    {:?}", life_time);
+            info!("  Tiles:          {:?}", tiles_time);
+            info!("  Objects:        {:?}", objects_time);
+            info!("  TOTAL:          {:?}", total_time);
+        }
         info!("===============================");
+
+        // Sort tiles and objects once during load (not every frame during rendering!)
+        // This dramatically improves FPS by avoiding clone + sort every frame
+        info!("Sorting tiles and objects by depth...");
+        map_data.tiles.sort_by_key(|tile| tile.z_m);
+        map_data.objects.sort_by_key(|obj| obj.z);
+        info!("Sorted {} tiles and {} objects", map_data.tiles.len(), map_data.objects.len());
 
         Ok(map_data)
     }
@@ -315,29 +372,70 @@ impl MapLoader {
     }
 
     /// Parse portals
-    fn parse_portals(node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
+    async fn parse_portals(node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
+        use crate::map::portal_loader::PortalCache;
+
         let node_read = node.read().unwrap();
+        let mut portal_cache = PortalCache::new();
+
+        info!("Parsing portals from map data...");
 
         for (_name, child) in node_read.children.iter() {
             let child_read = child.read().unwrap();
             let portal_id = child_read.name.parse::<i32>().unwrap_or(0);
             drop(child_read);
 
+            let pt = Self::get_int_property_from_node(child, "pt").unwrap_or(0);
+            let pn = Self::get_string_property_from_node(child, "pn").unwrap_or_default();
+            let x = Self::get_int_property_from_node(child, "x").unwrap_or(0);
+            let y = Self::get_int_property_from_node(child, "y").unwrap_or(0);
+
+            // Load portal textures based on portal type (only for types with graphics)
+            let (textures, origins) = if let Some(portal_type_str) = crate::map::portal_loader::get_portal_type_string(pt) {
+                info!("  Portal {}: type={} ({}), name='{}', pos=({},{})", portal_id, pt, portal_type_str, pn, x, y);
+
+                match portal_cache.get_or_load_portal(portal_type_str).await {
+                    Some((frames, frame_origins)) => {
+                        info!("    Loaded {} frames for portal type '{}'", frames.len(), portal_type_str);
+                        (frames, frame_origins)
+                    }
+                    None => {
+                        warn!("    Failed to load portal textures for type '{}', using empty", portal_type_str);
+                        (Vec::new(), Vec::new())
+                    }
+                }
+            } else {
+                // No graphics for this portal type (sp, pi, pc, ps, etc.)
+                info!("  Portal {}: type={} (no graphics), name='{}', pos=({},{})", portal_id, pt, pn, x, y);
+                (Vec::new(), Vec::new())
+            };
+
             let portal = Portal {
                 id: portal_id,
-                pn: Self::get_string_property_from_node(child, "pn").unwrap_or_default(),
-                pt: Self::get_int_property_from_node(child, "pt").unwrap_or(0),
-                x: Self::get_int_property_from_node(child, "x").unwrap_or(0),
-                y: Self::get_int_property_from_node(child, "y").unwrap_or(0),
+                pn: pn.clone(),
+                pt,
+                x,
+                y,
                 tm: Self::get_int_property_from_node(child, "tm").unwrap_or(999999999),
                 tn: Self::get_string_property_from_node(child, "tn").unwrap_or_default(),
                 script: Self::get_string_property_from_node(child, "script").unwrap_or_default(),
                 horizontal_impact: Self::get_int_property_from_node(child, "horizontalImpact").unwrap_or(0),
                 vertical_impact: Self::get_int_property_from_node(child, "verticalImpact").unwrap_or(0),
+                textures: textures.clone(),
+                origins: origins.clone(),
             };
+
+            // Log portal state for debugging
+            info!("    Portal added: id={}, type={}, textures={}, name='{}'",
+                  portal_id, pt, portal.textures.len(), pn);
 
             map_data.portals.push(portal);
         }
+
+        info!("Portal parsing complete. Total portals: {}", map_data.portals.len());
+        let portals_with_textures = map_data.portals.iter().filter(|p| !p.textures.is_empty()).count();
+        info!("  Portals with textures: {}", portals_with_textures);
+        info!("  Portals without textures: {}", map_data.portals.len() - portals_with_textures);
 
         Ok(())
     }
@@ -346,10 +444,12 @@ impl MapLoader {
     async fn parse_life(node: &WzNodeArc, map_data: &mut MapData) -> Result<(), String> {
         let node_read = node.read().unwrap();
         let mut npc_cache = NpcCache::new();
+        let mut mob_cache = MobCache::new();
 
-        // FIRST PASS: Collect all NPC IDs and life data
+        // FIRST PASS: Collect all NPC and Mob IDs and life data
         use std::collections::HashSet;
         let mut unique_npc_ids: HashSet<String> = HashSet::new();
+        let mut unique_mob_ids: HashSet<String> = HashSet::new();
         
         // Store life entries temporarily (we'll create Life structs after loading textures)
         struct LifeData {
@@ -395,13 +495,15 @@ impl MapLoader {
                 hide: hide_val == 1,
             });
 
-            // Collect unique NPC IDs
+            // Collect unique NPC and Mob IDs
             if life_type == "n" && !id.is_empty() {
-                unique_npc_ids.insert(id);
+                unique_npc_ids.insert(id.clone());
+            } else if life_type == "m" && !id.is_empty() {
+                unique_mob_ids.insert(id.clone());
             }
         }
 
-        // SECOND PASS: Batch fetch all unique NPC WZ files
+        // SECOND PASS: Batch fetch all unique NPC and Mob WZ files
         if !unique_npc_ids.is_empty() {
             info!("Batch fetching {} unique NPC files...", unique_npc_ids.len());
             let npc_ids_vec: Vec<String> = unique_npc_ids.iter().cloned().collect();
@@ -414,9 +516,9 @@ impl MapLoader {
                 let cache_name = format!("/01/Npc/{}.img", npc_id);
                 fetch_requests.push((url, cache_name));
             }
-            
+
             let fetch_results = AssetManager::fetch_and_cache_batch(fetch_requests).await;
-            
+
             // Parse all the fetched files
             info!("Parsing {} NPC files...", npc_ids_vec.len());
             for (i, npc_id) in npc_ids_vec.iter().enumerate() {
@@ -428,17 +530,42 @@ impl MapLoader {
             }
         }
 
-        // THIRD PASS: Load NPC names and textures, create life entries
+        if !unique_mob_ids.is_empty() {
+            info!("Batch fetching {} unique Mob files...", unique_mob_ids.len());
+            let mob_ids_vec: Vec<String> = unique_mob_ids.iter().cloned().collect();
+            let mut fetch_requests = Vec::new();
+            for mob_id in &mob_ids_vec {
+                let url = format!(
+                    "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Mob/{}.img",
+                    mob_id
+                );
+                let cache_name = format!("/01/Mob/{}.img", mob_id);
+                fetch_requests.push((url, cache_name));
+            }
+
+            let fetch_results = AssetManager::fetch_and_cache_batch(fetch_requests).await;
+
+            // Parse all the fetched files
+            info!("Parsing {} Mob files...", mob_ids_vec.len());
+            for (i, mob_id) in mob_ids_vec.iter().enumerate() {
+                if let Ok(bytes) = &fetch_results[i] {
+                    if let Err(e) = mob_cache.preload_mob_from_bytes(mob_id, bytes.clone()).await {
+                        warn!("Failed to parse Mob {}: {}", mob_id, e);
+                    }
+                }
+            }
+        }
+
+        // THIRD PASS: Load NPC/Mob names and textures, create life entries
         info!("Loading {} life entries...", life_data.len());
         for life_entry in life_data {
             info!("  Life: id='{}', type='{}', pos=({},{})", life_entry.id, life_entry.life_type, life_entry.x, life_entry.y);
 
-            // Load NPC name and texture if this is an NPC
+            // Load name and texture based on life type
             let (name, texture, origin_x, origin_y) = if life_entry.life_type == "n" && !life_entry.id.is_empty() {
-                // Get NPC name from String/Npc.img
+                // Load NPC
                 let npc_name = NpcCache::get_npc_name(&life_entry.id).await.unwrap_or_default();
 
-                // Load NPC texture (should be cached now)
                 match npc_cache.get_or_load_npc(&life_entry.id).await {
                     Some((tex, ox, oy)) => {
                         info!("    Loaded NPC: {} ({})", npc_name, life_entry.id);
@@ -447,6 +574,20 @@ impl MapLoader {
                     None => {
                         warn!("    Failed to load NPC texture: {} ({})", npc_name, life_entry.id);
                         (npc_name, None, 0, 0)
+                    }
+                }
+            } else if life_entry.life_type == "m" && !life_entry.id.is_empty() {
+                // Load Mob
+                let mob_name = MobCache::get_mob_name(&life_entry.id).await.unwrap_or_default();
+
+                match mob_cache.get_or_load_mob(&life_entry.id).await {
+                    Some((tex, ox, oy)) => {
+                        info!("    Loaded Mob: {} ({})", mob_name, life_entry.id);
+                        (mob_name, Some(tex), ox, oy)
+                    }
+                    None => {
+                        warn!("    Failed to load Mob texture: {} ({})", mob_name, life_entry.id);
+                        (mob_name, None, 0, 0)
                     }
                 }
             } else {

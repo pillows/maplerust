@@ -115,7 +115,7 @@ pub struct Foothold {
 pub struct Portal {
     pub id: i32,
     pub pn: String,        // Portal name
-    pub pt: i32,           // Portal type
+    pub pt: i32,           // Portal type (0=sp, 2=pv, etc.)
     pub x: i32,
     pub y: i32,
     pub tm: i32,           // Target map
@@ -123,6 +123,8 @@ pub struct Portal {
     pub script: String,
     pub horizontal_impact: i32,
     pub vertical_impact: i32,
+    pub textures: Vec<Texture2D>, // Animation frames
+    pub origins: Vec<(i32, i32)>,  // Origin offset for each frame (x, y)
 }
 
 /// Life (NPC/Mob) spawn data
@@ -230,5 +232,43 @@ impl MapData {
         }
 
         None
+    }
+
+    /// Find the nearest foothold below a position (for spawning)
+    pub fn find_foothold_below(&self, x: f32, y: f32) -> Option<(f32, &Foothold)> {
+        let ix = x as i32;
+        let iy = y as i32;
+
+        let mut closest_y = None;
+        let mut closest_fh = None;
+
+        for fh in &self.footholds {
+            // Check if point is within horizontal range
+            let min_x = fh.x1.min(fh.x2);
+            let max_x = fh.x1.max(fh.x2);
+
+            if ix >= min_x && ix <= max_x {
+                // Calculate Y position on this foothold at the given X
+                let dx = fh.x2 - fh.x1;
+                let dy = fh.y2 - fh.y1;
+
+                let fh_y = if dx != 0 {
+                    fh.y1 + ((ix - fh.x1) * dy) / dx
+                } else {
+                    fh.y1
+                };
+
+                // Only consider footholds below the spawn point
+                if fh_y >= iy {
+                    // Find the closest one
+                    if closest_y.is_none() || fh_y < closest_y.unwrap() {
+                        closest_y = Some(fh_y);
+                        closest_fh = Some(fh);
+                    }
+                }
+            }
+        }
+
+        closest_fh.map(|fh| (closest_y.unwrap() as f32, fh))
     }
 }

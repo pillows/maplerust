@@ -58,6 +58,9 @@ pub const CAMERA_DEBUG_MODE: bool = false;
 /// Show hitboxes and collision boundaries
 pub const SHOW_HITBOXES: bool = false;
 
+/// Render portals (set to false to improve FPS if needed)
+pub const RENDER_PORTALS: bool = true;
+
 /// Enable god mode (invincibility)
 pub const GOD_MODE: bool = false;
 

@@ -13,8 +13,8 @@ impl MapRenderer {
     pub fn new() -> Self {
         Self {
             debug_footholds: flags::SHOW_HITBOXES,
-            debug_portals: true,
-            debug_bounds: true,
+            debug_portals: true, // Show portal circles for debugging
+            debug_bounds: false,
             npc_font: None,
         }
     }
@@ -36,6 +36,7 @@ impl MapRenderer {
         }
     }
 
+
     /// Render the entire map at the given camera position
     pub fn render(&self, map: &MapData, camera_x: f32, camera_y: f32) {
         // Draw backgrounds (layers behind player)
@@ -55,10 +56,8 @@ impl MapRenderer {
             self.render_footholds(map, camera_x, camera_y);
         }
 
-        // Draw portals for debugging
-        if self.debug_portals {
-            self.render_portals(map, camera_x, camera_y);
-        }
+        // Draw portals (always render)
+        self.render_portals(map, camera_x, camera_y);
 
         // Draw map bounds for debugging
         if self.debug_bounds {
@@ -175,15 +174,23 @@ impl MapRenderer {
 
     /// Render tiles (ground textures)
     fn render_tiles(&self, map: &MapData, camera_x: f32, camera_y: f32) {
-        // Sort tiles by z_m (z-depth) so they render in the correct order
-        let mut sorted_tiles = map.tiles.clone();
-        sorted_tiles.sort_by_key(|tile| tile.z_m);
+        // Get screen dimensions for culling
+        let screen_width = screen_width();
+        let screen_height = screen_height();
 
-        for tile in &sorted_tiles {
+        // NOTE: Tiles should be pre-sorted by z_m when the map loads
+        // If not sorted, uncomment the sorting code (but this hurts FPS)
+        for tile in &map.tiles {
             // Calculate screen position (tiles don't have parallax scrolling)
             // Apply origin offset: origin defines the anchor point of the sprite
             let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
             let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
+
+            // Screen culling - skip tiles outside view (with margin for tile size)
+            if screen_x < -100.0 || screen_x > screen_width + 100.0
+                || screen_y < -100.0 || screen_y > screen_height + 100.0 {
+                continue;
+            }
 
             // Draw the tile texture if loaded
             if let Some(texture) = &tile.texture {
@@ -207,15 +214,23 @@ impl MapRenderer {
 
     /// Render objects (decorative elements)
     fn render_objects(&self, map: &MapData, camera_x: f32, camera_y: f32) {
-        // Sort objects by z-depth so they render in the correct order
-        let mut sorted_objects = map.objects.clone();
-        sorted_objects.sort_by_key(|obj| obj.z);
+        // Get screen dimensions for culling
+        let screen_width = screen_width();
+        let screen_height = screen_height();
 
-        for obj in &sorted_objects {
+        // NOTE: Objects should be pre-sorted by z when the map loads
+        // If not sorted, uncomment the sorting code (but this hurts FPS)
+        for obj in &map.objects {
             // Calculate screen position (objects don't have parallax scrolling)
             // Apply origin offset: origin defines the anchor point of the sprite
             let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
             let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
+
+            // Screen culling - skip objects outside view (with generous margin)
+            if screen_x < -200.0 || screen_x > screen_width + 200.0
+                || screen_y < -200.0 || screen_y > screen_height + 200.0 {
+                continue;
+            }
 
             // Draw the object texture if loaded
             if let Some(texture) = &obj.texture {
@@ -363,31 +378,103 @@ impl MapRenderer {
         }
     }
 
-    /// Render portals for debugging
+    /// Render portals
     fn render_portals(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+        // Skip portal rendering if disabled via flag
+        if !flags::RENDER_PORTALS {
+            return;
+        }
+
+        // Get current time for animation (cross-platform, works in WASM)
+        let now = get_time() as f32 * 1000.0; // Convert to milliseconds
+
+        // Get screen dimensions for culling
+        let screen_w = screen_width();
+        let screen_h = screen_height();
+
+        // Log portal rendering stats once
+        static mut LOGGED_PORTAL_STATS: bool = false;
+        if unsafe { !LOGGED_PORTAL_STATS } {
+            let total_portals = map.portals.len();
+            let with_textures = map.portals.iter().filter(|p| !p.textures.is_empty()).count();
+            info!("=== PORTAL RENDERING ===");
+            info!("  Total portals in map: {}", total_portals);
+            info!("  Portals with textures: {}", with_textures);
+            info!("  Portals without textures: {}", total_portals - with_textures);
+
+            // Show first few portal details
+            for (i, portal) in map.portals.iter().take(3).enumerate() {
+                info!("  Portal {}: type={}, textures={}, pos=({},{})",
+                      i, portal.pt, portal.textures.len(), portal.x, portal.y);
+            }
+            info!("========================");
+            unsafe { LOGGED_PORTAL_STATS = true; }
+        }
+
         for portal in &map.portals {
             let screen_x = portal.x as f32 - camera_x;
             let screen_y = portal.y as f32 - camera_y;
 
-            // Draw portal as a circle
-            let color = match portal.pt {
-                0 => BLUE,      // Spawn point
-                2 => GREEN,     // Regular portal
-                3 => RED,       // Auto-enter
-                _ => PURPLE,
-            };
+            // Screen culling - skip portals outside view (with 100px margin)
+            if screen_x < -100.0 || screen_x > screen_w + 100.0
+                || screen_y < -100.0 || screen_y > screen_h + 100.0 {
+                continue;
+            }
 
-            draw_circle(screen_x, screen_y, 10.0, color);
-            draw_circle_lines(screen_x, screen_y, 10.0, 2.0, WHITE);
+            // Render portal using its own textures
+            if !portal.textures.is_empty() && !portal.origins.is_empty() {
+                // Animate portals (8 fps)
+                let frame_count = portal.textures.len();
+                let frame_idx = ((now / 125.0) as usize) % frame_count; // 125ms per frame = 8 fps
 
-            // Draw portal name
-            if flags::SHOW_DEBUG_UI {
-                let name = if !portal.pn.is_empty() {
-                    &portal.pn
-                } else {
-                    "unnamed"
+                if let (Some(texture), Some(&(origin_x, origin_y))) =
+                    (portal.textures.get(frame_idx), portal.origins.get(frame_idx)) {
+
+                    // Apply origin offset for proper positioning
+                    // Each frame has its own origin, ensuring stable vertical position
+                    let draw_x = screen_x - origin_x as f32;
+                    let draw_y = screen_y - origin_y as f32;
+
+                    draw_texture(texture, draw_x, draw_y, WHITE);
+
+                    // Draw portal name for debugging
+                    if self.debug_portals && flags::SHOW_DEBUG_UI {
+                        let name = if !portal.pn.is_empty() {
+                            &portal.pn
+                        } else {
+                            "unnamed"
+                        };
+                        draw_text(name, screen_x - 20.0, screen_y - texture.height() - 5.0, 14.0, WHITE);
+                    }
+                    continue; // Texture rendered successfully
+                }
+            } else if portal.pt != 0 && portal.pt != 1 && portal.pt != 10 {
+                // Only show debug for visible portal types (not sp, pi, or ph)
+                // Do nothing for invisible portals
+            }
+
+            // Fall back to debug circle if no texture available
+            if self.debug_portals {
+                let color = match portal.pt {
+                    0 => BLUE,      // Spawn point
+                    2 => GREEN,     // Regular portal
+                    3 => RED,       // Auto-enter
+                    6 => YELLOW,    // Type 6 portal
+                    _ => PURPLE,
                 };
-                draw_text(name, screen_x - 20.0, screen_y - 15.0, 14.0, WHITE);
+
+                draw_circle(screen_x, screen_y, 10.0, color);
+                draw_circle_lines(screen_x, screen_y, 10.0, 2.0, WHITE);
+
+                // Draw portal name
+                if flags::SHOW_DEBUG_UI {
+                    let name = if !portal.pn.is_empty() {
+                        &portal.pn
+                    } else {
+                        "unnamed"
+                    };
+                    draw_text(name, screen_x - 20.0, screen_y - 15.0, 14.0, WHITE);
+                }
             }
         }
     }
