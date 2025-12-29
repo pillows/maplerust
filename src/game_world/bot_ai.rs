@@ -1,0 +1,275 @@
+use macroquad::prelude::*;
+use crate::map::{MapData, Life, Ladder};
+
+/// Bot AI state for a single mob
+#[derive(Debug, Clone)]
+pub struct BotState {
+    pub life_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,  // Horizontal velocity
+    pub vy: f32,  // Vertical velocity
+    pub on_ground: bool,
+    pub facing_right: bool,
+    pub move_timer: f32,
+    pub move_duration: f32,
+    pub move_direction: i32, // -1 = left, 0 = idle, 1 = right
+    pub climbing: bool,
+    pub current_ladder: Option<i32>, // Ladder ID if climbing
+}
+
+impl BotState {
+    pub fn new(life: &Life) -> Self {
+        Self {
+            life_id: life.id.clone(),
+            x: life.x as f32,
+            y: life.y as f32,
+            vx: 0.0,
+            vy: 0.0,
+            on_ground: true,
+            facing_right: !life.flip,
+            move_timer: rand::gen_range(1.0, 3.0),
+            move_duration: 0.0,
+            move_direction: 0,
+            climbing: false,
+            current_ladder: None,
+        }
+    }
+}
+
+/// Bot AI manager that updates all mob AI
+pub struct BotAI {
+    pub bot_states: Vec<BotState>,
+}
+
+impl BotAI {
+    pub fn new() -> Self {
+        Self {
+            bot_states: Vec::new(),
+        }
+    }
+
+    /// Initialize bot states from map life data (mobs only)
+    pub fn initialize_from_map(&mut self, map: &MapData) {
+        self.bot_states.clear();
+
+        for life in &map.life {
+            // Only create AI for mobs (type "m"), not NPCs (type "n")
+            if life.life_type == "m" {
+                self.bot_states.push(BotState::new(life));
+            }
+        }
+
+        info!("Initialized {} bot AI states", self.bot_states.len());
+    }
+
+    /// Update all bots
+    pub fn update(&mut self, dt: f32, map: &MapData) {
+        for bot in &mut self.bot_states {
+            Self::update_bot(bot, dt, map);
+        }
+    }
+
+    /// Update a single bot's AI
+    fn update_bot(bot: &mut BotState, dt: f32, map: &MapData) {
+        // Find the life data for this bot
+        let life = match map.life.iter().find(|l| l.id == bot.life_id) {
+            Some(l) => l,
+            None => return,
+        };
+
+        // If climbing, handle ladder logic
+        if bot.climbing {
+            Self::update_climbing(bot, dt, map, life);
+            return;
+        }
+
+        // Update movement timer
+        bot.move_timer -= dt;
+
+        if bot.move_timer <= 0.0 {
+            // Choose a new action
+            Self::choose_new_action(bot, life);
+        }
+
+        // Apply movement based on current direction
+        let base_speed = 50.0; // Slower than player for more natural mob movement
+        bot.vx = (bot.move_direction as f32) * base_speed;
+
+        // Apply horizontal movement
+        bot.x += bot.vx * dt;
+
+        // Clamp to spawn range if defined
+        if life.rx0 != 0 || life.rx1 != 0 {
+            let min_x = life.rx0.min(life.rx1) as f32;
+            let max_x = life.rx0.max(life.rx1) as f32;
+
+            if bot.x < min_x {
+                bot.x = min_x;
+                bot.move_direction = 0; // Stop if hitting boundary
+                bot.move_timer = 0.0; // Force new action
+            } else if bot.x > max_x {
+                bot.x = max_x;
+                bot.move_direction = 0;
+                bot.move_timer = 0.0;
+            }
+        }
+
+        // Check if near a ladder and randomly decide to climb
+        if bot.on_ground && rand::gen_range(0.0, 1.0) < 0.05 * dt {
+            if let Some(ladder) = Self::find_nearby_ladder(bot, map) {
+                bot.climbing = true;
+                bot.current_ladder = Some(ladder.id);
+                bot.x = ladder.x as f32; // Snap to ladder x position
+                bot.vx = 0.0;
+                bot.vy = -30.0; // Start climbing up
+                bot.on_ground = false;
+                return;
+            }
+        }
+
+        // Apply gravity
+        let gravity = 800.0;
+        bot.vy += gravity * dt;
+
+        // Update vertical position
+        bot.y += bot.vy * dt;
+
+        // Check collision with footholds
+        if let Some(fh) = map.find_foothold_at(bot.x, bot.y + 30.0) {
+            // Calculate Y on the foothold
+            let dx = fh.x2 - fh.x1;
+            let dy = fh.y2 - fh.y1;
+            let ix = bot.x as i32;
+
+            let fh_y = if dx != 0 {
+                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+            } else {
+                fh.y1 as f32
+            };
+
+            // Snap to foothold if falling through it
+            if bot.y + 30.0 >= fh_y && bot.vy >= 0.0 {
+                bot.y = fh_y - 30.0;
+                bot.vy = 0.0;
+                bot.on_ground = true;
+
+                // Small chance to jump when on ground
+                if rand::gen_range(0.0, 1.0) < 0.1 * dt {
+                    bot.vy = -300.0;
+                    bot.on_ground = false;
+                }
+            } else {
+                bot.on_ground = false;
+            }
+        } else {
+            bot.on_ground = false;
+        }
+
+        // Clamp to map bounds
+        bot.x = bot.x.max(map.info.vr_left as f32).min(map.info.vr_right as f32);
+        bot.y = bot.y.max(map.info.vr_top as f32).min(map.info.vr_bottom as f32);
+
+        // Update facing direction based on movement
+        if bot.vx > 0.0 {
+            bot.facing_right = true;
+        } else if bot.vx < 0.0 {
+            bot.facing_right = false;
+        }
+    }
+
+    /// Handle ladder climbing logic
+    fn update_climbing(bot: &mut BotState, dt: f32, map: &MapData, _life: &Life) {
+        // Find the ladder
+        let ladder = match bot.current_ladder {
+            Some(id) => map.ladders.iter().find(|l| l.id == id),
+            None => {
+                bot.climbing = false;
+                return;
+            }
+        };
+
+        if let Some(ladder) = ladder {
+            // Move up or down on the ladder
+            bot.y += bot.vy * dt;
+
+            // Check if reached top or bottom of ladder
+            let min_y = ladder.y1.min(ladder.y2) as f32;
+            let max_y = ladder.y1.max(ladder.y2) as f32;
+
+            if bot.y <= min_y {
+                // Reached top - exit ladder
+                bot.climbing = false;
+                bot.current_ladder = None;
+                bot.y = min_y;
+                bot.vy = 0.0;
+                bot.on_ground = true;
+                bot.move_timer = 0.0; // Choose new action immediately
+            } else if bot.y >= max_y {
+                // Reached bottom - exit ladder
+                bot.climbing = false;
+                bot.current_ladder = None;
+                bot.y = max_y;
+                bot.vy = 0.0;
+                bot.on_ground = true;
+                bot.move_timer = 0.0;
+            }
+
+            // Random chance to exit ladder midway
+            if rand::gen_range(0.0, 1.0) < 0.2 * dt {
+                bot.climbing = false;
+                bot.current_ladder = None;
+                bot.vy = 0.0;
+                bot.move_timer = 0.0;
+            }
+        } else {
+            // Ladder not found, stop climbing
+            bot.climbing = false;
+            bot.current_ladder = None;
+        }
+    }
+
+    /// Choose a new random action for the bot
+    fn choose_new_action(bot: &mut BotState, _life: &Life) {
+        let action = rand::gen_range(0, 10);
+
+        if action < 4 {
+            // 40% chance to move left
+            bot.move_direction = -1;
+            bot.move_duration = rand::gen_range(1.0, 3.0);
+            bot.move_timer = bot.move_duration;
+        } else if action < 8 {
+            // 40% chance to move right
+            bot.move_direction = 1;
+            bot.move_duration = rand::gen_range(1.0, 3.0);
+            bot.move_timer = bot.move_duration;
+        } else {
+            // 20% chance to idle
+            bot.move_direction = 0;
+            bot.move_duration = rand::gen_range(0.5, 2.0);
+            bot.move_timer = bot.move_duration;
+        }
+    }
+
+    /// Find a nearby ladder that the bot can climb
+    fn find_nearby_ladder<'a>(bot: &BotState, map: &'a MapData) -> Option<&'a Ladder> {
+        for ladder in &map.ladders {
+            // Check if bot is near the ladder horizontally (within 20 pixels)
+            if (bot.x - ladder.x as f32).abs() < 20.0 {
+                // Check if bot is within vertical range of the ladder
+                let min_y = ladder.y1.min(ladder.y2) as f32;
+                let max_y = ladder.y1.max(ladder.y2) as f32;
+
+                if bot.y >= min_y - 10.0 && bot.y <= max_y + 10.0 {
+                    return Some(ladder);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get bot state by life ID
+    pub fn get_bot_state(&self, life_id: &str) -> Option<&BotState> {
+        self.bot_states.iter().find(|b| b.life_id == life_id)
+    }
+}

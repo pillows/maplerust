@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use crate::map::data::*;
 use crate::flags;
+use crate::game_world::bot_ai::BotAI;
 
 pub struct MapRenderer {
     debug_footholds: bool,
@@ -38,7 +39,7 @@ impl MapRenderer {
 
 
     /// Render the entire map at the given camera position
-    pub fn render(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+    pub fn render(&self, map: &MapData, camera_x: f32, camera_y: f32, bot_ai: Option<&BotAI>) {
         // Draw backgrounds (layers behind player)
         self.render_backgrounds(map, camera_x, camera_y, false);
 
@@ -49,7 +50,7 @@ impl MapRenderer {
         self.render_objects(map, camera_x, camera_y);
 
         // Draw NPCs and mobs
-        self.render_life(map, camera_x, camera_y);
+        self.render_life(map, camera_x, camera_y, bot_ai);
 
         // Draw footholds (platforms) for debugging
         if self.debug_footholds {
@@ -66,7 +67,7 @@ impl MapRenderer {
     }
 
     /// Render foreground elements (after player is drawn)
-    pub fn render_foreground(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+    pub fn render_foreground(&self, map: &MapData, camera_x: f32, camera_y: f32, _bot_ai: Option<&BotAI>) {
         // Draw backgrounds marked as "front"
         self.render_backgrounds(map, camera_x, camera_y, true);
     }
@@ -259,22 +260,38 @@ impl MapRenderer {
     }
 
     /// Render life (NPCs and mobs)
-    fn render_life(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+    fn render_life(&self, map: &MapData, camera_x: f32, camera_y: f32, bot_ai: Option<&BotAI>) {
         for life in &map.life {
             // Skip if hidden
             if life.hide {
                 continue;
             }
 
+            // Get position from bot AI if this is a mob, otherwise use static position
+            let (pos_x, pos_y, flip) = if life.life_type == "m" {
+                if let Some(bot_ai) = bot_ai {
+                    if let Some(bot) = bot_ai.get_bot_state(&life.id) {
+                        (bot.x, bot.y, !bot.facing_right)
+                    } else {
+                        (life.x as f32, life.y as f32, life.flip)
+                    }
+                } else {
+                    (life.x as f32, life.y as f32, life.flip)
+                }
+            } else {
+                // NPCs use static positions
+                (life.x as f32, life.y as f32, life.flip)
+            };
+
             // Calculate screen position
             // Apply origin offset: origin defines the anchor point of the sprite
-            let screen_x = life.x as f32 - camera_x - life.origin_x as f32;
-            let screen_y = life.y as f32 - camera_y - life.origin_y as f32;
+            let screen_x = pos_x - camera_x - life.origin_x as f32;
+            let screen_y = pos_y - camera_y - life.origin_y as f32;
 
             // Draw the NPC/mob texture if loaded
             if let Some(texture) = &life.texture {
                 let params = DrawTextureParams {
-                    flip_x: life.flip,
+                    flip_x: flip,
                     flip_y: false,
                     ..Default::default()
                 };

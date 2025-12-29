@@ -594,12 +594,22 @@ impl MapLoader {
                 (String::new(), None, 0, 0)
             };
 
+            // Adjust y position to place life entity on the nearest foothold below
+            let adjusted_y = if let Some((foothold_y, _fh)) = map_data.find_foothold_below(life_entry.x as f32, life_entry.y as f32) {
+                // Place the life entity on the foothold
+                // The origin_y represents the bottom of the sprite, so we subtract it to get proper positioning
+                (foothold_y - origin_y as f32) as i32
+            } else {
+                // No foothold found, use original y position
+                life_entry.y
+            };
+
             let life = Life {
                 id: life_entry.id,
                 name,
                 life_type: life_entry.life_type,
                 x: life_entry.x,
-                y: life_entry.y,
+                y: adjusted_y,
                 foothold: life_entry.foothold,
                 cx: life_entry.cx,
                 cy: life_entry.cy,

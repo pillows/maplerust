@@ -3,6 +3,7 @@ use crate::character::CharacterData;
 use crate::flags::{self, DebugFlags};
 use crate::map::{MapData, MapLoader, MapRenderer};
 use crate::map::portal_loader::PortalCache;
+use crate::game_world::bot_ai::BotAI;
 
 /// Gameplay state for when the player is in the game world
 pub struct GameplayState {
@@ -19,6 +20,7 @@ pub struct GameplayState {
     portal_cache: PortalCache,
     current_map_id: String,
     target_portal_name: Option<String>, // Portal name to spawn at when entering new map
+    bot_ai: BotAI, // Bot AI manager for mob movement
     // Debug map loader
     map_input: String,
     map_input_active: bool,
@@ -44,6 +46,7 @@ impl GameplayState {
             portal_cache: PortalCache::new(),
             current_map_id: "100010000".to_string(), // Default starting map
             target_portal_name: None, // No target portal on initial spawn
+            bot_ai: BotAI::new(),
             map_input: String::new(),
             map_input_active: false,
             loading_new_map: false,
@@ -130,6 +133,9 @@ impl GameplayState {
                     self.on_ground = false;
                     warn!("No foothold found below spawn point, player may fall");
                 }
+
+                // Initialize bot AI from map data
+                self.bot_ai.initialize_from_map(&map);
 
                 self.current_map_id = map_id.to_string();
                 self.map_data = Some(map);
@@ -383,19 +389,26 @@ impl GameplayState {
         self.player_x = self.player_x.max(map.info.vr_left as f32).min(map.info.vr_right as f32);
         self.player_y = self.player_y.max(map.info.vr_top as f32).min(map.info.vr_bottom as f32);
 
+        // Update bot AI
+        self.bot_ai.update(dt, map);
+
         // Camera follows player (unless in camera debug mode)
         if !flags::CAMERA_DEBUG_MODE {
             let map_width = (map.info.vr_right - map.info.vr_left) as f32;
             let map_height = (map.info.vr_bottom - map.info.vr_top) as f32;
 
-            // For small maps, center the map on screen instead of following player
+            // Center camera on player
+            let target_camera_x = self.player_x - screen_width() / 2.0;
+            let target_camera_y = self.player_y - screen_height() / 2.0;
+
+            // For small maps, clamp camera to show the entire map centered
             if map_width <= screen_width() {
                 // Map is narrower than screen - center it horizontally
                 self.camera_x = map.info.vr_left as f32 - (screen_width() - map_width) / 2.0;
             } else {
-                // Map is wider than screen - follow player with clamping
-                self.camera_x = self.player_x - screen_width() / 2.0;
-                self.camera_x = self.camera_x.max(map.info.vr_left as f32)
+                // Map is wider than screen - follow player with clamping to map bounds
+                self.camera_x = target_camera_x
+                    .max(map.info.vr_left as f32)
                     .min(map.info.vr_right as f32 - screen_width());
             }
 
@@ -403,9 +416,9 @@ impl GameplayState {
                 // Map is shorter than screen - center it vertically
                 self.camera_y = map.info.vr_top as f32 - (screen_height() - map_height) / 2.0;
             } else {
-                // Map is taller than screen - follow player with clamping
-                self.camera_y = self.player_y - screen_height() / 2.0;
-                self.camera_y = self.camera_y.max(map.info.vr_top as f32)
+                // Map is taller than screen - follow player with clamping to map bounds
+                self.camera_y = target_camera_y
+                    .max(map.info.vr_top as f32)
                     .min(map.info.vr_bottom as f32 - screen_height());
             }
         } else {
@@ -448,7 +461,7 @@ impl GameplayState {
 
         if let Some(ref map) = self.map_data {
             // Render map backgrounds (behind player)
-            self.map_renderer.render(map, self.camera_x, self.camera_y);
+            self.map_renderer.render(map, self.camera_x, self.camera_y, Some(&self.bot_ai));
 
             // Draw player (simple square for now)
             let player_screen_x = self.player_x - self.camera_x;
@@ -497,7 +510,7 @@ impl GameplayState {
             }
 
             // Render map foregrounds (in front of player)
-            self.map_renderer.render_foreground(map, self.camera_x, self.camera_y);
+            self.map_renderer.render_foreground(map, self.camera_x, self.camera_y, Some(&self.bot_ai));
         } else {
             let text = "No map loaded";
             draw_text(text, 20.0, 40.0, 20.0, RED);
