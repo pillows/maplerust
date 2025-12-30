@@ -43,11 +43,8 @@ impl MapRenderer {
         // Draw backgrounds (layers behind player)
         self.render_backgrounds(map, camera_x, camera_y, false);
 
-        // Draw tiles (ground textures)
-        self.render_tiles(map, camera_x, camera_y);
-
-        // Draw objects (decorative elements)
-        self.render_objects(map, camera_x, camera_y);
+        // Draw tiles and objects interleaved by layer for proper z-ordering
+        self.render_tiles_and_objects(map, camera_x, camera_y);
 
         // Draw NPCs and mobs
         self.render_life(map, camera_x, camera_y, bot_ai);
@@ -173,7 +170,104 @@ impl MapRenderer {
         }
     }
 
-    /// Render tiles (ground textures)
+    /// Render tiles and objects interleaved by layer for proper z-ordering
+    fn render_tiles_and_objects(&self, map: &MapData, camera_x: f32, camera_y: f32) {
+        // Get screen dimensions for culling
+        let screen_w = screen_width();
+        let screen_h = screen_height();
+
+        // Collect all layers that have tiles or objects
+        let mut layers: Vec<i32> = Vec::new();
+        for tile in &map.tiles {
+            if !layers.contains(&tile.layer) {
+                layers.push(tile.layer);
+            }
+        }
+        for obj in &map.objects {
+            if !layers.contains(&obj.layer) {
+                layers.push(obj.layer);
+            }
+        }
+        layers.sort();
+
+        // Render each layer in order
+        for layer in layers {
+            // Render tiles for this layer
+            for tile in map.tiles.iter().filter(|t| t.layer == layer) {
+                let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
+                let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
+
+                // Get texture dimensions for proper culling
+                let (tex_w, tex_h) = if let Some(tex) = &tile.texture {
+                    (tex.width(), tex.height())
+                } else {
+                    (90.0, 60.0) // Default placeholder size
+                };
+
+                // Screen culling - check if ANY part of the texture is visible
+                // Texture is visible if its right edge is past left screen edge
+                // AND its left edge is before right screen edge (same for vertical)
+                if screen_x + tex_w < 0.0 || screen_x > screen_w
+                    || screen_y + tex_h < 0.0 || screen_y > screen_h {
+                    continue;
+                }
+
+                if let Some(texture) = &tile.texture {
+                    draw_texture(texture, screen_x, screen_y, WHITE);
+
+                    if flags::SHOW_DEBUG_UI {
+                        let info = format!("T{}: {}/{}", tile.id, tile.u, tile.no);
+                        draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, YELLOW);
+                    }
+                } else if flags::SHOW_DEBUG_UI {
+                    draw_rectangle(screen_x, screen_y, 90.0, 60.0, Color::from_rgba(100, 50, 0, 100));
+                    let info = format!("T{}", tile.id);
+                    draw_text(&info, screen_x + 5.0, screen_y + 30.0, 12.0, RED);
+                }
+            }
+
+            // Render objects for this layer
+            for obj in map.objects.iter().filter(|o| o.layer == layer) {
+                let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
+                let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
+
+                // Get texture dimensions for proper culling
+                let (tex_w, tex_h) = if let Some(tex) = &obj.texture {
+                    (tex.width(), tex.height())
+                } else {
+                    (10.0, 10.0) // Default placeholder size
+                };
+
+                // Screen culling - check if ANY part of the texture is visible
+                if screen_x + tex_w < 0.0 || screen_x > screen_w
+                    || screen_y + tex_h < 0.0 || screen_y > screen_h {
+                    continue;
+                }
+
+                if let Some(texture) = &obj.texture {
+                    let params = DrawTextureParams {
+                        flip_x: obj.f,
+                        flip_y: false,
+                        rotation: (obj.r as f32).to_radians(),
+                        ..Default::default()
+                    };
+                    draw_texture_ex(texture, screen_x, screen_y, WHITE, params);
+
+                    if flags::SHOW_DEBUG_UI {
+                        let info = format!("O{}: {}", obj.id, obj.oS);
+                        draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, ORANGE);
+                    }
+                } else if flags::SHOW_DEBUG_UI {
+                    draw_circle(screen_x, screen_y, 5.0, Color::from_rgba(255, 165, 0, 150));
+                    let info = format!("O{}", obj.id);
+                    draw_text(&info, screen_x + 10.0, screen_y + 5.0, 12.0, ORANGE);
+                }
+            }
+        }
+    }
+
+    /// Render tiles (ground textures) - kept for reference but not used
+    #[allow(dead_code)]
     fn render_tiles(&self, map: &MapData, camera_x: f32, camera_y: f32) {
         // Get screen dimensions for culling
         let screen_width = screen_width();
@@ -214,7 +308,8 @@ impl MapRenderer {
         }
     }
 
-    /// Render objects (decorative elements)
+    /// Render objects (decorative elements) - kept for reference but not used
+    #[allow(dead_code)]
     fn render_objects(&self, map: &MapData, camera_x: f32, camera_y: f32) {
         // Get screen dimensions for culling
         let screen_width = screen_width();

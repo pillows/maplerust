@@ -287,6 +287,45 @@ impl MapData {
         closest_fh.map(|fh| (closest_y.unwrap() as f32, fh))
     }
 
+    /// Find the nearest foothold strictly below a given Y position (for drop-through)
+    /// This excludes the current foothold the player is standing on
+    pub fn find_foothold_strictly_below(&self, x: f32, y: f32, min_distance: f32) -> Option<(f32, &Foothold)> {
+        let ix = x as i32;
+        let iy = y as i32;
+
+        let mut closest_y: Option<i32> = None;
+        let mut closest_fh = None;
+
+        for fh in &self.footholds {
+            // Check if point is within horizontal range
+            let min_x = fh.x1.min(fh.x2);
+            let max_x = fh.x1.max(fh.x2);
+            
+            if ix >= min_x && ix <= max_x {
+                // Calculate Y position on this foothold at the given X
+                let dx = fh.x2 - fh.x1;
+                let dy = fh.y2 - fh.y1;
+
+                let fh_y = if dx != 0 {
+                    fh.y1 + ((ix - fh.x1) * dy) / dx
+                } else {
+                    fh.y1
+                };
+
+                // Only consider footholds strictly below (with minimum distance)
+                if fh_y as f32 > y + min_distance {
+                    // Find the closest one below
+                    if closest_y.is_none() || fh_y < closest_y.unwrap() {
+                        closest_y = Some(fh_y);
+                        closest_fh = Some(fh);
+                    }
+                }
+            }
+        }
+
+        closest_fh.map(|fh| (closest_y.unwrap() as f32, fh))
+    }
+
     /// Find foothold by ID
     pub fn find_foothold_by_id(&self, id: i32) -> Option<&Foothold> {
         self.footholds.iter().find(|fh| fh.id == id)

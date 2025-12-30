@@ -334,17 +334,17 @@ impl MiniMap {
 
     fn get_frame_width(&self) -> f32 {
         match self.mode {
-            MiniMapMode::Min => 150.0,
-            MiniMapMode::Normal => 180.0,
-            MiniMapMode::Max => 250.0,
+            MiniMapMode::Min => 180.0,
+            MiniMapMode::Normal => 200.0,
+            MiniMapMode::Max => 300.0,  // Larger for maximized mode
         }
     }
 
     fn get_frame_height(&self) -> f32 {
         match self.mode {
-            MiniMapMode::Min => 18.0,
-            MiniMapMode::Normal => 120.0,
-            MiniMapMode::Max => 180.0,
+            MiniMapMode::Min => 22.0,
+            MiniMapMode::Normal => 140.0,
+            MiniMapMode::Max => 220.0,  // Larger for maximized mode
         }
     }
 
@@ -367,19 +367,19 @@ impl MiniMap {
 
     fn draw_min_mode(&self, x: f32, y: f32, width: f32, map: &MapData) {
         // Draw collapsed minimap (just a title bar)
-        let bar_height = 18.0;
+        let bar_height = 22.0;
         
         // Draw background bar
-        draw_rectangle(x, y, width, bar_height, Color::from_rgba(0, 0, 0, 180));
+        draw_rectangle(x, y, width, bar_height, Color::from_rgba(0, 0, 0, 200));
         draw_rectangle_lines(x, y, width, bar_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw map name
+        // Draw map name with larger font
         let map_name = if !map.info.map_name.is_empty() {
             &map.info.map_name
         } else {
             "Unknown"
         };
-        draw_text(map_name, x + 5.0, y + 13.0, 12.0, WHITE);
+        draw_text(map_name, x + 8.0, y + 16.0, 14.0, WHITE);
 
         // Draw buttons
         self.bt_min.draw();
@@ -388,21 +388,22 @@ impl MiniMap {
 
     fn draw_normal_mode(&self, x: f32, y: f32, width: f32, height: f32, player_x: f32, player_y: f32, map: &MapData) {
         // Draw semi-transparent background
-        draw_rectangle(x, y, width, height, Color::from_rgba(0, 0, 0, 180));
+        draw_rectangle(x, y, width, height, Color::from_rgba(0, 0, 0, 200));
         draw_rectangle_lines(x, y, width, height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw title bar
-        let title_height = 18.0;
-        draw_rectangle(x, y, width, title_height, Color::from_rgba(40, 40, 60, 220));
+        // Draw title bar with larger height for better map name display
+        let title_height = 24.0;
+        draw_rectangle(x, y, width, title_height, Color::from_rgba(40, 40, 60, 230));
         draw_line(x, y + title_height, x + width, y + title_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw map name at top
+        // Draw map name at top with larger font
         let map_name = if !map.info.map_name.is_empty() {
             &map.info.map_name
         } else {
             "Unknown"
         };
-        draw_text(map_name, x + 5.0, y + 13.0, 11.0, WHITE);
+        let font_size = if self.mode == MiniMapMode::Max { 16.0 } else { 14.0 };
+        draw_text(map_name, x + 8.0, y + 17.0, font_size, WHITE);
 
         // Draw map content area
         let content_x = x + 5.0;

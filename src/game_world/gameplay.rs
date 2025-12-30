@@ -8,7 +8,7 @@ use crate::audio::AudioManager;
 use crate::cursor::{CursorManager, CursorState};
 use crate::character_info_ui::StatusBarUI;
 use crate::minimap::MiniMap;
-use crate::ui_windows::{InventoryWindow, EquipWindow};
+use crate::ui_windows::{InventoryWindow, EquipWindow, UserInfoWindow};
 use crate::cash_shop::CashShop;
 use crate::key_config::KeyConfig;
 use crate::chat_balloon::ChatBalloonSystem;
@@ -50,6 +50,8 @@ pub struct GameplayState {
     // NPC interaction tracking
     last_npc_click_time: f32,
     last_npc_click_id: Option<String>,
+    // Character double-click tracking
+    last_player_click_time: f32,
     // Focus tracking
     window_focused: bool,
     last_dt: f32,
@@ -62,6 +64,7 @@ pub struct GameplayState {
     // UI Windows
     inventory_window: InventoryWindow,
     equip_window: EquipWindow,
+    user_info_window: UserInfoWindow,
     // New UI components
     cash_shop: CashShop,
     key_config: KeyConfig,
@@ -103,6 +106,7 @@ impl GameplayState {
             backspace_repeat_delay: 0.05, // Repeat every 50ms when held
             last_npc_click_time: -1.0,
             last_npc_click_id: None,
+            last_player_click_time: -1.0,
             window_focused: true,
             last_dt: 0.016, // Default to ~60fps
             cursor_manager: CursorManager::new(),
@@ -110,6 +114,7 @@ impl GameplayState {
             minimap: MiniMap::new(),
             inventory_window: InventoryWindow::new(),
             equip_window: EquipWindow::new(),
+            user_info_window: UserInfoWindow::new(),
             cash_shop: CashShop::new(),
             key_config: KeyConfig::new(),
             chat_balloon: ChatBalloonSystem::new(),
@@ -132,12 +137,13 @@ impl GameplayState {
         let game_menu_load = self.game_menu.load_assets();
         let inventory_load = self.inventory_window.load_assets();
         let equip_load = self.equip_window.load_assets();
+        let user_info_load = self.user_info_window.load_assets();
 
         // info!("Waiting for UI assets to load in parallel...");
         // Wait for all UI assets to load
         let _ = futures::join!(font_load, cursor_load, status_bar_load, minimap_load, 
                                cash_shop_load, key_config_load, chat_balloon_load, game_menu_load,
-                               inventory_load, equip_load);
+                               inventory_load, equip_load, user_info_load);
 
         // info!("UI assets loaded. Font: ok, Cursors: {}, StatusBar: {}",
         //       self.cursor_manager.is_loaded(),
@@ -507,6 +513,30 @@ impl GameplayState {
             }
         }
         
+        // Handle player double-click (show UserInfo window)
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let (mouse_x, mouse_y) = mouse_position();
+            let player_screen_x = self.player_x - self.camera_x;
+            let player_screen_y = self.player_y - self.camera_y;
+            
+            // Check if click is on the player character
+            if mouse_x >= player_screen_x - 15.0 && mouse_x <= player_screen_x + 15.0 &&
+               mouse_y >= player_screen_y - 30.0 && mouse_y <= player_screen_y + 30.0 {
+                
+                let current_time = get_time() as f32;
+                let double_click_threshold = 0.5; // 500ms
+                
+                if (current_time - self.last_player_click_time) < double_click_threshold {
+                    // Double-click detected! Show UserInfo window
+                    info!("Player double-clicked, showing UserInfo window");
+                    self.user_info_window.show();
+                    self.last_player_click_time = -1.0; // Reset to prevent triple-click
+                } else {
+                    self.last_player_click_time = current_time;
+                }
+            }
+        }
+        
         // Handle NPC double-click interaction
         if is_mouse_button_pressed(MouseButton::Left) {
             let (mouse_x, mouse_y) = mouse_position();
@@ -550,8 +580,14 @@ impl GameplayState {
                         if let Some(last_id) = &self.last_npc_click_id {
                             if last_id == &life.id && 
                                (current_time - self.last_npc_click_time) < double_click_threshold {
-                                // Double-click detected!
+                                // Double-click detected! Show NPC dialog
                                 info!("NPC interaction created: {} (ID: {})", life.name, life.id);
+                                
+                                // Show NPC dialog balloon with sample text
+                                let npc_dialog = format!("Hello! I'm {}. Lorem ipsum dolor sit amet, consectetur adipiscing elit. How can I help you today?", 
+                                    if !life.name.is_empty() { &life.name } else { "an NPC" });
+                                self.chat_balloon.show_npc_dialog(&npc_dialog, npc_x, npc_y - life.origin_y as f32);
+                                
                                 // Reset click tracking to prevent triple-clicks from triggering again
                                 self.last_npc_click_time = -1.0;
                                 self.last_npc_click_id = None;
@@ -738,15 +774,13 @@ impl GameplayState {
                             }
                         };
                         
-                        // Look for a platform below the current one
-                        if let Some((below_y, _)) = map.find_foothold_below(self.player_x, current_fh_y + 10.0) {
-                            // Only drop through if there's another platform below
-                            if below_y > current_fh_y + 20.0 {
-                                self.drop_through_platform = true;
-                                self.player_vy = 50.0; // Small downward velocity to start falling
-                                self.on_ground = false;
-                                info!("Player dropping through platform to y={}", below_y);
-                            }
+                        // Look for a platform strictly below the current one (at least 15 pixels below)
+                        if let Some((below_y, _)) = map.find_foothold_strictly_below(self.player_x, current_fh_y, 15.0) {
+                            // Drop through to the platform below
+                            self.drop_through_platform = true;
+                            self.player_vy = 100.0; // Downward velocity to start falling
+                            self.on_ground = false;
+                            info!("Player dropping through platform from y={} to y={}", current_fh_y, below_y);
                         }
                     }
                 } else if jump_pressed && self.on_ground {
@@ -893,7 +927,9 @@ impl GameplayState {
             // VRTop is a guideline but camera should follow player everywhere
             let vr_bottom = map.info.vr_bottom as f32;
             let screen_h = screen_height();
-            let max_camera_y = vr_bottom - screen_h;
+            // Account for status bar UI at bottom (approximately 70px)
+            let ui_bottom_margin = 70.0;
+            let max_camera_y = vr_bottom - screen_h + ui_bottom_margin;
 
             // Only clamp to bottom - no top constraint so camera can follow player upwards
             self.camera_y = target_camera_y.min(max_camera_y);
@@ -919,12 +955,18 @@ impl GameplayState {
         // Update status bar UI
         self.status_bar.update(clamped_dt, &self.character);
 
+        // Check for sent chat message and show balloon
+        if let Some(message) = self.status_bar.take_last_sent_message() {
+            self.chat_balloon.show_player_chat(&message, self.player_x, self.player_y);
+        }
+
         // Update minimap
         self.minimap.update();
 
         // Update UI windows
         self.inventory_window.update();
         self.equip_window.update();
+        self.user_info_window.update();
 
         // Update new UI components
         self.cash_shop.update();
@@ -1064,6 +1106,7 @@ impl GameplayState {
         // Draw UI windows
         self.inventory_window.draw();
         self.equip_window.draw();
+        self.user_info_window.draw(&self.character.name, self.character.level);
 
         // Draw new UI windows
         self.key_config.draw();

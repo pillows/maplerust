@@ -119,12 +119,18 @@ impl ChatBalloonSystem {
 
         let mut frames = HashMap::new();
 
-        // Load balloon styles 0-5
+        // Load balloon styles 0-5 for player chat
         for style in 0..6 {
             let base_path = format!("{}", style);
             if let Ok(frame) = Self::load_balloon_frame(&root_node, &base_path).await {
                 frames.insert(style, frame);
             }
+        }
+
+        // Load NPC balloon frame (style 100 = npc)
+        if let Ok(frame) = Self::load_balloon_frame(&root_node, "npc").await {
+            frames.insert(100, frame);  // Use 100 for NPC balloon type
+            info!("Loaded NPC chat balloon frame");
         }
 
         Ok(frames)
@@ -206,8 +212,14 @@ impl ChatBalloonSystem {
 
     /// Show NPC dialog balloon
     pub fn show_npc_dialog(&mut self, text: &str, npc_x: f32, npc_y: f32) {
-        // Position balloon above NPC
-        self.show_balloon(text, npc_x, npc_y - 80.0, 0, 5.0);
+        // Position balloon above NPC, use NPC balloon type (100)
+        self.show_balloon(text, npc_x, npc_y - 80.0, 100, 5.0);
+    }
+
+    /// Show player chat balloon above player
+    pub fn show_player_chat(&mut self, text: &str, player_x: f32, player_y: f32) {
+        // Position balloon above player, use default balloon type (0)
+        self.show_balloon(text, player_x, player_y - 50.0, 0, 4.0);
     }
 
     /// Update balloons (decrease lifetime, remove expired)

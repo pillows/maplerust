@@ -212,9 +212,22 @@ impl MapLoader {
 
         // Sort tiles and objects once during load (not every frame during rendering!)
         // This dramatically improves FPS by avoiding clone + sort every frame
+        // Sort by layer first, then by z-depth within each layer
         // info!("Sorting tiles and objects by depth...");
-        map_data.tiles.sort_by_key(|tile| tile.z_m);
-        map_data.objects.sort_by_key(|obj| obj.z);
+        map_data.tiles.sort_by(|a, b| {
+            // Primary sort by layer, secondary by z_m
+            match a.layer.cmp(&b.layer) {
+                std::cmp::Ordering::Equal => a.z_m.cmp(&b.z_m),
+                other => other,
+            }
+        });
+        map_data.objects.sort_by(|a, b| {
+            // Primary sort by layer, secondary by z
+            match a.layer.cmp(&b.layer) {
+                std::cmp::Ordering::Equal => a.z.cmp(&b.z),
+                other => other,
+            }
+        });
         // info!("Sorted {} tiles and {} objects", map_data.tiles.len(), map_data.objects.len());
 
         Ok(map_data)

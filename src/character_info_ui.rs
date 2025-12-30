@@ -143,6 +143,7 @@ struct ChatState {
     input_buffer: String,
     scroll_offset: usize,
     max_visible_lines: usize,
+    last_sent_message: Option<String>,  // Track last sent message for balloon display
 }
 
 impl ChatState {
@@ -152,6 +153,7 @@ impl ChatState {
             input_buffer: String::new(),
             scroll_offset: 0,
             max_visible_lines: 5,
+            last_sent_message: None,
         }
     }
 }
@@ -942,19 +944,27 @@ impl StatusBarUI {
     /// Send a chat message
     fn send_message(&mut self, character: &CharacterData) {
         if !self.chat_state.input_buffer.is_empty() {
+            let message_text = self.chat_state.input_buffer.clone();
             let message = ChatMessage {
                 target: self.current_chat_target.clone(),
                 sender: character.name.clone(),
-                text: self.chat_state.input_buffer.clone(),
+                text: message_text.clone(),
                 timestamp: get_time(),
             };
             self.chat_state.messages.push(message);
+            
+            // Store the sent message for balloon display
+            self.chat_state.last_sent_message = Some(message_text);
+            
             self.chat_state.input_buffer.clear();
 
             // Auto-scroll to bottom
             let max_scroll = self.chat_state.messages.len()
                 .saturating_sub(self.chat_state.max_visible_lines);
             self.chat_state.scroll_offset = max_scroll;
+            
+            // Unfocus chat after sending
+            self.chat_focused = false;
         }
     }
 
@@ -1311,13 +1321,14 @@ impl StatusBarUI {
         draw_text(&target_prefix, text_x, text_y, font_size, prefix_color);
         let prefix_width = measure_text(&target_prefix, None, font_size as u16, 1.0).width;
 
-        // Draw input text
-        draw_text(&self.chat_state.input_buffer, text_x + prefix_width, text_y, font_size, WHITE);
+        // Draw input text - use dark gray color for visibility on white background
+        let text_color = Color::from_rgba(40, 40, 40, 255);  // Dark gray for readability
+        draw_text(&self.chat_state.input_buffer, text_x + prefix_width, text_y, font_size, text_color);
 
         // Draw blinking caret (only when focused)
         if self.chat_focused && self.caret_visible {
             let text_width = measure_text(&self.chat_state.input_buffer, None, font_size as u16, 1.0).width;
-            draw_text("|", text_x + prefix_width + text_width, text_y, font_size, WHITE);
+            draw_text("|", text_x + prefix_width + text_width, text_y, font_size, text_color);
         }
     }
 
@@ -1364,6 +1375,11 @@ impl StatusBarUI {
     /// Check if menu button was clicked
     pub fn bt_menu_clicked(&self) -> bool {
         self.bt_menu.is_clicked()
+    }
+
+    /// Get and clear the last sent chat message (for balloon display)
+    pub fn take_last_sent_message(&mut self) -> Option<String> {
+        self.chat_state.last_sent_message.take()
     }
 }
 
