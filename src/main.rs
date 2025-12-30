@@ -11,6 +11,7 @@ mod map;
 mod audio;
 mod cursor;
 mod character_info_ui;
+mod minimap;
 
 #[macroquad::main("RustMaple")]
 async fn main() {

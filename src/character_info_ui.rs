@@ -169,6 +169,7 @@ pub struct StatusBarUI {
     chat_space: Option<TextureWithOrigin>,
     chat_space2: Option<TextureWithOrigin>,
     chat_cover: Option<TextureWithOrigin>,
+    chat_enter: Option<TextureWithOrigin>,  // Chat input background when focused
     chat_open_button: Button,
     chat_close_button: Button,
     scroll_up: Button,
@@ -184,6 +185,15 @@ pub struct StatusBarUI {
     bt_character: Button,
     bt_stat: Button,
     bt_quest: Button,
+    bt_cashshop: Button,
+    bt_channel: Button,
+    bt_equip: Button,
+    bt_inven: Button,
+    bt_keysetting: Button,
+    bt_menu: Button,
+    bt_system: Button,
+    bt_skill: Button,
+    bt_mts: Button,
     notice: Option<TextureWithOrigin>,
 
     // Level number sprites (0-9)
@@ -217,15 +227,15 @@ pub struct StatusBarUI {
     gauge_offsets: std::collections::HashMap<String, (f32, f32, f32)>,  // gauge_type -> (x, y, width)
     dragging_gauge: bool,
     drag_start: Vec2,
+
+    // Chat focus state
+    chat_focused: bool,
 }
 
 impl StatusBarUI {
     pub fn new() -> Self {
-        let mut gauge_offsets = HashMap::new();
-        // Correct gauge positions
-        gauge_offsets.insert("hp".to_string(), (29.0, 2.0, 135.0));
-        gauge_offsets.insert("mp".to_string(), (198.0, 2.0, 135.0));
-        gauge_offsets.insert("exp".to_string(), (28.0, 18.0, 300.0));
+        let gauge_offsets = HashMap::new();
+        // Gauge positions will be set based on gaugeBackgrd origin
 
         Self {
             background: None,
@@ -236,6 +246,7 @@ impl StatusBarUI {
             chat_space: None,
             chat_space2: None,
             chat_cover: None,
+            chat_enter: None,
             chat_open_button: Button::new(0.0, 0.0),
             chat_close_button: Button::new(0.0, 0.0),
             scroll_up: Button::new(0.0, 0.0),
@@ -247,6 +258,15 @@ impl StatusBarUI {
             bt_character: Button::new(0.0, 0.0),
             bt_stat: Button::new(0.0, 0.0),
             bt_quest: Button::new(0.0, 0.0),
+            bt_cashshop: Button::new(0.0, 0.0),
+            bt_channel: Button::new(0.0, 0.0),
+            bt_equip: Button::new(0.0, 0.0),
+            bt_inven: Button::new(0.0, 0.0),
+            bt_keysetting: Button::new(0.0, 0.0),
+            bt_menu: Button::new(0.0, 0.0),
+            bt_system: Button::new(0.0, 0.0),
+            bt_skill: Button::new(0.0, 0.0),
+            bt_mts: Button::new(0.0, 0.0),
             notice: None,
             lv_numbers: Vec::new(),
             gauge_numbers: HashMap::new(),
@@ -261,11 +281,12 @@ impl StatusBarUI {
             gauge_timer: 0.0,
             caret_timer: 0.0,
             caret_visible: true,
-            gauge_edit_mode: false,  // Edit mode disabled - positions are correct
+            gauge_edit_mode: false,
             selected_gauge: None,
             gauge_offsets,
             dragging_gauge: false,
             drag_start: Vec2::ZERO,
+            chat_focused: false,
         }
     }
 
@@ -289,6 +310,7 @@ impl StatusBarUI {
                 self.gauge_mp = ui_data.gauge_mp;
                 self.gauge_exp = ui_data.gauge_exp;
                 self.notice = ui_data.notice;
+                self.chat_enter = ui_data.chat_enter;
 
                 // Set up buttons with loaded textures
                 self.chat_open_button = ui_data.chat_open_button;
@@ -300,6 +322,15 @@ impl StatusBarUI {
                 self.bt_character = ui_data.bt_character;
                 self.bt_stat = ui_data.bt_stat;
                 self.bt_quest = ui_data.bt_quest;
+                self.bt_cashshop = ui_data.bt_cashshop;
+                self.bt_channel = ui_data.bt_channel;
+                self.bt_equip = ui_data.bt_equip;
+                self.bt_inven = ui_data.bt_inven;
+                self.bt_keysetting = ui_data.bt_keysetting;
+                self.bt_menu = ui_data.bt_menu;
+                self.bt_system = ui_data.bt_system;
+                self.bt_skill = ui_data.bt_skill;
+                self.bt_mts = ui_data.bt_mts;
 
                 self.loaded = true;
             }
@@ -355,6 +386,7 @@ impl StatusBarUI {
         data.chat_space = Self::load_texture(&root_node, "mainBar/chatSpace").await.ok();
         data.chat_space2 = Self::load_texture(&root_node, "mainBar/chatSpace2").await.ok();
         data.chat_cover = Self::load_texture(&root_node, "mainBar/chatCover").await.ok();
+        data.chat_enter = Self::load_texture(&root_node, "mainBar/chatEnter").await.ok();
         data.notice = Self::load_texture(&root_node, "mainBar/notice").await.ok();
 
         // Load chat targets (optional) - under mainBar/chatTarget/
@@ -459,15 +491,51 @@ impl StatusBarUI {
         }
 
         // Load buttons - all under mainBar/
-        data.chat_open_button = Self::load_button(&root_node, "mainBar/chatOpen", 0.0, 0.0).await?;
-        data.chat_close_button = Self::load_button(&root_node, "mainBar/chatClose", 0.0, 0.0).await?;
-        data.scroll_up = Self::load_button(&root_node, "mainBar/scrollUp", 0.0, 0.0).await?;
-        data.scroll_down = Self::load_button(&root_node, "mainBar/scrollDown", 0.0, 0.0).await?;
-        data.bt_chat = Self::load_button(&root_node, "mainBar/BtChat", 0.0, 0.0).await?;
-        data.bt_claim = Self::load_button(&root_node, "mainBar/BtClaim", 0.0, 0.0).await?;
-        data.bt_character = Self::load_button(&root_node, "mainBar/BtCharacter", 0.0, 0.0).await?;
-        data.bt_stat = Self::load_button(&root_node, "mainBar/BtStat", 0.0, 0.0).await?;
-        data.bt_quest = Self::load_button(&root_node, "mainBar/BtQuest", 0.0, 0.0).await?;
+        // Try to load each button, logging errors but not failing the entire UI
+        info!("Loading buttons...");
+
+        data.chat_open_button = Self::load_button(&root_node, "mainBar/chatOpen", 0.0, 0.0).await
+            .map_err(|e| { info!("chatOpen failed: {}", e); e })?;
+        data.chat_close_button = Self::load_button(&root_node, "mainBar/chatClose", 0.0, 0.0).await
+            .map_err(|e| { info!("chatClose failed: {}", e); e })?;
+        data.scroll_up = Self::load_button(&root_node, "mainBar/scrollUp", 0.0, 0.0).await
+            .map_err(|e| { info!("scrollUp failed: {}", e); e })?;
+        data.scroll_down = Self::load_button(&root_node, "mainBar/scrollDown", 0.0, 0.0).await
+            .map_err(|e| { info!("scrollDown failed: {}", e); e })?;
+
+        info!("Loading main buttons...");
+        data.bt_chat = Self::load_button(&root_node, "mainBar/BtChat", 0.0, 0.0).await
+            .map_err(|e| { info!("BtChat failed: {}", e); e })?;
+        data.bt_claim = Self::load_button(&root_node, "mainBar/BtClaim", 0.0, 0.0).await
+            .map_err(|e| { info!("BtClaim failed: {}", e); e })?;
+        data.bt_character = Self::load_button(&root_node, "mainBar/BtCharacter", 0.0, 0.0).await
+            .map_err(|e| { info!("BtCharacter failed: {}", e); e })?;
+        data.bt_stat = Self::load_button(&root_node, "mainBar/BtStat", 0.0, 0.0).await
+            .map_err(|e| { info!("BtStat failed: {}", e); e })?;
+        data.bt_quest = Self::load_button(&root_node, "mainBar/BtQuest", 0.0, 0.0).await
+            .map_err(|e| { info!("BtQuest failed: {}", e); e })?;
+
+        info!("Loading new buttons...");
+        data.bt_cashshop = Self::load_button(&root_node, "mainBar/BtCashShop", 0.0, 0.0).await
+            .map_err(|e| { info!("BtCashShop failed: {}", e); e })?;
+        data.bt_channel = Self::load_button(&root_node, "mainBar/BtChannel", 0.0, 0.0).await
+            .map_err(|e| { info!("BtChannel failed: {}", e); e })?;
+        data.bt_equip = Self::load_button(&root_node, "mainBar/BtEquip", 0.0, 0.0).await
+            .map_err(|e| { info!("BtEquip failed: {}", e); e })?;
+        data.bt_inven = Self::load_button(&root_node, "mainBar/BtInven", 0.0, 0.0).await
+            .map_err(|e| { info!("BtInven failed: {}", e); e })?;
+        data.bt_keysetting = Self::load_button(&root_node, "mainBar/BtKeysetting", 0.0, 0.0).await
+            .map_err(|e| { info!("BtKeysetting failed: {}", e); e })?;
+        data.bt_menu = Self::load_button(&root_node, "mainBar/BtMenu", 0.0, 0.0).await
+            .map_err(|e| { info!("BtMenu failed: {}", e); e })?;
+        data.bt_system = Self::load_button(&root_node, "mainBar/BtSystem", 0.0, 0.0).await
+            .map_err(|e| { info!("BtSystem failed: {}", e); e })?;
+        data.bt_skill = Self::load_button(&root_node, "mainBar/BtSkill", 0.0, 0.0).await
+            .map_err(|e| { info!("BtSkill failed: {}", e); e })?;
+        data.bt_mts = Self::load_button(&root_node, "mainBar/BtMTS", 0.0, 0.0).await
+            .map_err(|e| { info!("BtMTS failed: {}", e); e })?;
+
+        info!("All buttons loaded successfully!");
         Ok(data)
     }
 
@@ -519,9 +587,28 @@ impl StatusBarUI {
         Ok(TextureWithOrigin { texture, origin })
     }
 
-    /// Load a button with all its states
+    /// Load a button with all its states and try to get position from WZ
     async fn load_button(root_node: &WzNodeArc, button_path: &str, x: f32, y: f32) -> Result<Button, String> {
         let mut button = Button::new(x, y);
+
+        // Try to get position from WZ data
+        if let Ok(button_node) = root_node.read().unwrap().at_path_parsed(button_path) {
+            let button_read = button_node.read().unwrap();
+
+            // Check for x coordinate
+            if let Some(x_node) = button_read.children.get("x") {
+                if let Some(x_val) = x_node.read().unwrap().try_as_int() {
+                    info!("{} has x position: {}", button_path, x_val);
+                }
+            }
+
+            // Check for y coordinate
+            if let Some(y_node) = button_read.children.get("y") {
+                if let Some(y_val) = y_node.read().unwrap().try_as_int() {
+                    info!("{} has y position: {}", button_path, y_val);
+                }
+            }
+        }
 
         // Load button states
         for state in ["normal", "pressed", "disabled", "mouseOver"] {
@@ -572,20 +659,89 @@ impl StatusBarUI {
         // Update position based on screen size
         self.position = Vec2::new(0.0, screen_height());
 
+        // Handle chat focus with Enter key
+        if is_key_pressed(KeyCode::Enter) {
+            if !self.chat_focused {
+                // Focus chat when unfocused
+                self.chat_focused = true;
+            } else if self.chat_state.input_buffer.is_empty() {
+                // Unfocus chat when focused and no text
+                self.chat_focused = false;
+            }
+            // If focused and has text, handle_chat_input will send the message
+        }
+
+        // Handle Escape to unfocus chat
+        if is_key_pressed(KeyCode::Escape) && self.chat_focused {
+            self.chat_focused = false;
+            self.chat_state.input_buffer.clear();
+        }
+
+        // Handle chat target selection with keys 1-6 (only when chat is NOT focused)
+        // When unfocused: pressing a number sets chat target AND focuses chat (shows chatEnter)
+        // When focused: numbers are typed into the chat input
+        if !self.chat_focused {
+            let mut target_selected = false;
+            if is_key_pressed(KeyCode::Key1) {
+                self.current_chat_target = "expedition".to_string();
+                target_selected = true;
+            }
+            if is_key_pressed(KeyCode::Key2) {
+                self.current_chat_target = "association".to_string();
+                target_selected = true;
+            }
+            if is_key_pressed(KeyCode::Key3) {
+                self.current_chat_target = "guild".to_string();
+                target_selected = true;
+            }
+            if is_key_pressed(KeyCode::Key4) {
+                self.current_chat_target = "party".to_string();
+                target_selected = true;
+            }
+            if is_key_pressed(KeyCode::Key5) {
+                self.current_chat_target = "friend".to_string();
+                target_selected = true;
+            }
+            if is_key_pressed(KeyCode::Key6) {
+                self.current_chat_target = "all".to_string();
+                target_selected = true;
+            }
+            
+            // If a chat target was selected, also focus the chat to show chatEnter
+            if target_selected {
+                self.chat_focused = true;
+            }
+        }
+
+        // Check for mouse click outside chat area to unfocus
+        if self.chat_focused && is_mouse_button_pressed(MouseButton::Left) {
+            let (mouse_x, mouse_y) = mouse_position();
+            let screen_w = screen_width();
+            let screen_h = screen_height();
+            let base_x = screen_w / 2.0;
+            let base_y = screen_h;
+
+            // Define chat area bounds based on chatEnter origin (467, 58)
+            // chatEnter is positioned at base_x - 467, base_y - 58
+            let chat_left = base_x - 512.0;  // Left edge of chat area
+            let chat_right = base_x - 467.0 + 500.0;  // Right edge
+            let chat_top = base_y - 60.0;
+            let chat_bottom = base_y - 40.0;
+
+            // If clicked outside chat area, unfocus
+            if mouse_x < chat_left || mouse_x > chat_right || mouse_y < chat_top || mouse_y > chat_bottom {
+                self.chat_focused = false;
+            }
+        }
+
         // Handle gauge edit mode controls
         if self.gauge_edit_mode {
             self.handle_gauge_editing();
         }
 
-        // Update gauge animation
-        self.gauge_timer += dt;
-        if self.gauge_timer >= 0.1 {  // 10 FPS
-            self.gauge_timer = 0.0;
-            let max_frames = self.gauge_hp.len().max(self.gauge_mp.len()).max(self.gauge_exp.len());
-            if max_frames > 0 {
-                self.gauge_frame = (self.gauge_frame + 1) % max_frames;
-            }
-        }
+        // Don't animate gauges - they were flashing due to animation
+        // Keep gauge_frame at 0 for static display
+        self.gauge_frame = 0;
 
         // Update caret blink
         self.caret_timer += dt;
@@ -594,7 +750,68 @@ impl StatusBarUI {
             self.caret_visible = !self.caret_visible;
         }
 
-        // Update buttons
+        // Update button positions relative to screen (for click detection)
+        let screen_w = screen_width();
+        let screen_h = screen_height();
+        let base_x = screen_w / 2.0;
+        let base_y = screen_h;
+
+        // Update button positions - buttons are positioned using base_x/base_y
+        self.bt_claim.x = base_x;
+        self.bt_claim.y = base_y;
+
+        self.bt_system.x = base_x;
+        self.bt_system.y = base_y;
+
+        self.bt_cashshop.x = base_x;
+        self.bt_cashshop.y = base_y;
+
+        self.bt_channel.x = base_x;
+        self.bt_channel.y = base_y;
+
+        self.bt_chat.x = base_x;
+        self.bt_chat.y = base_y;
+
+        self.bt_keysetting.x = base_x;
+        self.bt_keysetting.y = base_y;
+
+        self.bt_menu.x = base_x;
+        self.bt_menu.y = base_y;
+
+        self.bt_quest.x = base_x;
+        self.bt_quest.y = base_y;
+
+        self.bt_stat.x = base_x;
+        self.bt_stat.y = base_y;
+
+        self.bt_inven.x = base_x;
+        self.bt_inven.y = base_y;
+
+        self.bt_equip.x = base_x;
+        self.bt_equip.y = base_y;
+
+        self.bt_character.x = base_x;
+        self.bt_character.y = base_y;
+
+        self.bt_skill.x = base_x;
+        self.bt_skill.y = base_y;
+
+        self.bt_mts.x = base_x;
+        self.bt_mts.y = base_y;
+
+        self.chat_open_button.x = base_x;
+        self.chat_open_button.y = base_y;
+
+        self.chat_close_button.x = base_x;
+        self.chat_close_button.y = base_y;
+
+        self.scroll_up.x = base_x;
+        self.scroll_up.y = base_y;
+
+        self.scroll_down.x = base_x;
+        self.scroll_down.y = base_y;
+
+        // Now update all buttons
         self.chat_open_button.update();
         self.chat_close_button.update();
         self.scroll_up.update();
@@ -604,6 +821,15 @@ impl StatusBarUI {
         self.bt_character.update();
         self.bt_stat.update();
         self.bt_quest.update();
+        self.bt_cashshop.update();
+        self.bt_channel.update();
+        self.bt_equip.update();
+        self.bt_inven.update();
+        self.bt_keysetting.update();
+        self.bt_menu.update();
+        self.bt_system.update();
+        self.bt_skill.update();
+        self.bt_mts.update();
 
         // Handle button clicks
         if self.chat_open_button.is_clicked() && !self.is_chat_open {
@@ -620,8 +846,10 @@ impl StatusBarUI {
             self.scroll_down();
         }
 
-        // Handle chat input
-        self.handle_chat_input(character);
+        // Handle chat input (only when chat is focused)
+        if self.chat_focused {
+            self.handle_chat_input(character);
+        }
     }
 
     /// Handle gauge editing mode - keyboard and mouse controls
@@ -806,29 +1034,24 @@ impl StatusBarUI {
             let gauge_bg_x = base_x - gauge_bg.origin.x;
             let gauge_bg_y = base_y - gauge_bg.origin.y;
             draw_texture(&gauge_bg.texture, gauge_bg_x, gauge_bg_y, WHITE);
-
-            // Debug: Draw outline around gauge background area
-            info!("Gauge background at ({}, {}), size: {}x{}, origin: {:?}",
-                gauge_bg_x, gauge_bg_y, gauge_bg.texture.width(), gauge_bg.texture.height(), gauge_bg.origin);
-
             Some((gauge_bg_x, gauge_bg_y))
         } else {
             None
         };
 
-        // Draw gauges (HP, MP, EXP) relative to gauge background
-        if let Some((gauge_bg_x, gauge_bg_y)) = gauge_bg_pos {
+        // Draw gauges (HP, MP, EXP) - pass base_x/base_y for positioning
+        if gauge_bg_pos.is_some() {
             // Always show gauges at 100%
-            self.draw_gauge("hp", 1.0, gauge_bg_x, gauge_bg_y);
-            self.draw_gauge("mp", 1.0, gauge_bg_x, gauge_bg_y);
-            self.draw_gauge("exp", 1.0, gauge_bg_x, gauge_bg_y);
+            self.draw_gauge("hp", 1.0, base_x, base_y);
+            self.draw_gauge("mp", 1.0, base_x, base_y);
+            self.draw_gauge("exp", 1.0, base_x, base_y);
 
             // Draw HP/MP/EXP numbers
-            self.draw_gauge_numbers("hp", character.hp, character.hp, gauge_bg_x, gauge_bg_y);
-            self.draw_gauge_numbers("mp", character.mp, character.mp, gauge_bg_x, gauge_bg_y);
+            self.draw_gauge_numbers("hp", character.hp, character.hp, base_x, base_y);
+            self.draw_gauge_numbers("mp", character.mp, character.mp, base_x, base_y);
             // For EXP, show as percentage (0-100)
-            let exp_percent = 50; // Placeholder - you'll need to calculate this based on character level
-            self.draw_gauge_numbers("exp", exp_percent, 100, gauge_bg_x, gauge_bg_y);
+            let exp_percent = 50; // Placeholder
+            self.draw_gauge_numbers("exp", exp_percent, 100, base_x, base_y);
         }
 
         if let Some(gauge_cov) = &self.gauge_cover {
@@ -854,10 +1077,27 @@ impl StatusBarUI {
                 let chat_x = base_x - chat_space2.origin.x;
                 let chat_y = base_y - chat_space2.origin.y;
                 draw_texture(&chat_space2.texture, chat_x, chat_y, WHITE);
-
-                // Draw chat input with caret - position relative to chat_space2
-                self.draw_chat_input(chat_x, chat_y);
             }
+
+            // Draw chatEnter overlay when chat is focused (shows input area more clearly)
+            let chat_enter_pos = if self.chat_focused {
+                if let Some(chat_enter) = &self.chat_enter {
+                    let enter_x = base_x - chat_enter.origin.x;
+                    let enter_y = base_y - chat_enter.origin.y;
+                    draw_texture(&chat_enter.texture, enter_x, enter_y, WHITE);
+                    Some((enter_x, enter_y))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Draw chat input - position based on chatEnter origin (467, 58)
+            // chatEnter starts at base_x - 467, so text should start slightly after that
+            let input_x = base_x - 460.0;  // Slightly right of chatEnter left edge
+            let input_y = base_y - 46.0;   // Vertically centered in chatEnter
+            self.draw_chat_input(input_x, input_y, chat_enter_pos.is_some());
 
             if let Some(chat_cover) = &self.chat_cover {
                 draw_texture(&chat_cover.texture, base_x - chat_cover.origin.x, base_y - chat_cover.origin.y, WHITE);
@@ -876,16 +1116,25 @@ impl StatusBarUI {
             }
         }
 
-        // Draw buttons
+        // Draw buttons using their origin values from WZ data
+        self.bt_claim.draw();
+        self.bt_system.draw();
+        self.bt_cashshop.draw();
+        self.bt_channel.draw();
+        self.bt_chat.draw();
+        self.bt_keysetting.draw();
+        self.bt_menu.draw();
+        self.bt_quest.draw();
+        self.bt_stat.draw();
+        self.bt_inven.draw();
+        self.bt_equip.draw();
+        self.bt_character.draw();
+        self.bt_skill.draw();
+        self.bt_mts.draw();
         self.chat_open_button.draw();
         self.chat_close_button.draw();
         self.scroll_up.draw();
         self.scroll_down.draw();
-        self.bt_chat.draw();
-        self.bt_claim.draw();
-        self.bt_character.draw();
-        self.bt_stat.draw();
-        self.bt_quest.draw();
 
         // Draw notice
         if let Some(notice) = &self.notice {
@@ -896,11 +1145,8 @@ impl StatusBarUI {
         if let Some(lv_back) = &self.lv_backtrnd {
             // Level background origin is (510, 33), size 222x32
             // Position level numbers inside the level background box
-            let lv_x = base_x - lv_back.origin.x + 35.0;  // Adjust horizontal position
-            let lv_y = base_y - lv_back.origin.y + 10.0;  // Adjust vertical position
-            info!("Drawing level {} at ({}, {}), lv_back origin: {:?}, pos: ({}, {})",
-                character.level, lv_x, lv_y, lv_back.origin,
-                base_x - lv_back.origin.x, base_y - lv_back.origin.y);
+            let lv_x = base_x - lv_back.origin.x + 35.0;
+            let lv_y = base_y - lv_back.origin.y + 10.0;
             self.draw_level(character.level, lv_x, lv_y);
         }
 
@@ -927,8 +1173,8 @@ impl StatusBarUI {
         }
     }
 
-    /// Draw a gauge (HP/MP/EXP) - base_x and base_y are the gauge background position
-    fn draw_gauge(&self, gauge_type: &str, percentage: f32, gauge_bg_x: f32, gauge_bg_y: f32) {
+    /// Draw a gauge (HP/MP/EXP) - base_x and base_y are the screen center/bottom
+    fn draw_gauge(&self, gauge_type: &str, percentage: f32, base_x: f32, base_y: f32) {
         let frames = match gauge_type {
             "hp" => &self.gauge_hp,
             "mp" => &self.gauge_mp,
@@ -937,28 +1183,33 @@ impl StatusBarUI {
         };
 
         if frames.is_empty() {
-            info!("draw_gauge: {} frames empty", gauge_type);
             return;
         }
 
-        let frame_idx = self.gauge_frame % frames.len();
-        let frame = &frames[frame_idx];
+        // Use frame 0 only - no animation to prevent flashing
+        let frame = &frames[0];
 
-        // Get gauge position from editable offsets
-        let (offset_x, offset_y, target_gauge_width) = self.gauge_offsets
-            .get(gauge_type)
-            .copied()
-            .unwrap_or((0.0, 0.0, 100.0));
+        // Gauge positions relative to gaugeBackgrd origin (286, 33)
+        // gaugeBackgrd is at base_x - 286, base_y - 33
+        // HP gauge: x=29, width=137
+        // MP gauge: x=198, width=137  
+        // EXP gauge: x=28, y=18, width=255 (shortened to fit within gaugeCover bounds)
+        let (offset_x, offset_y, max_width) = match gauge_type {
+            "hp" => (29.0, 2.0, 137.0),
+            "mp" => (198.0, 2.0, 137.0),
+            "exp" => (28.0, 18.0, 255.0),  // Shortened EXP bar to fit within bounds
+            _ => return,
+        };
 
-        let gauge_width = target_gauge_width * percentage;
+        // Get gaugeBackgrd position
+        let gauge_bg_x = base_x - 286.0;
+        let gauge_bg_y = base_y - 33.0;
 
+        let gauge_width = max_width * percentage;
         let draw_x = gauge_bg_x + offset_x;
         let draw_y = gauge_bg_y + offset_y;
 
-        info!("Drawing {} gauge at ({}, {}) with width {} ({}%), height: {}, gauge_bg: ({}, {})",
-            gauge_type, draw_x, draw_y, gauge_width, percentage * 100.0, frame.texture.height(), gauge_bg_x, gauge_bg_y);
-
-        // Stretch the 1-pixel gauge texture to fill the gauge width
+        // Stretch the gauge texture to fill the gauge width
         draw_texture_ex(
             &frame.texture,
             draw_x,
@@ -972,29 +1223,44 @@ impl StatusBarUI {
     }
 
     /// Draw gauge numbers (HP, MP, EXP) - displays "current/max" format
-    fn draw_gauge_numbers(&self, gauge_type: &str, current: u32, max: u32, gauge_bg_x: f32, gauge_bg_y: f32) {
+    fn draw_gauge_numbers(&self, gauge_type: &str, current: u32, max: u32, base_x: f32, base_y: f32) {
         if self.gauge_numbers.is_empty() {
             return;
         }
 
-        // Position numbers based on gauge type
-        let (base_x, base_y) = match gauge_type {
-            "hp" => (gauge_bg_x + 90.0, gauge_bg_y + 9.0),   // Right side of HP gauge
-            "mp" => (gauge_bg_x + 258.0, gauge_bg_y + 9.0),  // Right side of MP gauge
-            "exp" => (gauge_bg_x + 168.0, gauge_bg_y + 22.0), // Center of EXP gauge
+        // Get gaugeBackgrd position (origin 286, 33)
+        let gauge_bg_x = base_x - 286.0;
+        let gauge_bg_y = base_y - 33.0;
+
+        // Position numbers centered on each gauge bar
+        // HP bar: x=29 to x=166 (width 137), center at ~97
+        // MP bar: x=198 to x=335 (width 137), center at ~266
+        // EXP bar: x=28 to x=283 (width 255), center at ~155, y offset for exp row
+        let (num_x, num_y) = match gauge_type {
+            "hp" => (gauge_bg_x + 97.0, gauge_bg_y + 4.0),
+            "mp" => (gauge_bg_x + 266.0, gauge_bg_y + 4.0),
+            "exp" => (gauge_bg_x + 155.0, gauge_bg_y + 20.0),
             _ => return,
         };
 
-        // Format the text: "current\max" or "current%" for exp
-        // Note: MapleStory uses "\" as the separator, not "/"
+        // Format the text: "[current\max]" or "[current%]" for exp
         let text = if gauge_type == "exp" {
-            format!("{}%", current)
+            format!("[{}%]", current)
         } else {
-            format!("{}\\{}", current, max)
+            format!("[{}\\{}]", current, max)
         };
 
-        let mut x_offset = base_x;
-        let spacing = -1.0; // Slight negative spacing for tighter numbers
+        // Calculate total width to center the text
+        let mut total_width = 0.0;
+        for ch in text.chars() {
+            let key = ch.to_string();
+            if let Some(num_tex) = self.gauge_numbers.get(&key) {
+                total_width += num_tex.texture.width() - 1.0;
+            }
+        }
+
+        let mut x_offset = num_x - total_width / 2.0;
+        let spacing = -1.0;
 
         // Draw each character
         for ch in text.chars() {
@@ -1003,7 +1269,7 @@ impl StatusBarUI {
                 draw_texture(
                     &num_tex.texture,
                     x_offset - num_tex.origin.x,
-                    base_y - num_tex.origin.y,
+                    num_y - num_tex.origin.y,
                     WHITE,
                 );
                 x_offset += num_tex.texture.width() + spacing;
@@ -1031,20 +1297,27 @@ impl StatusBarUI {
         }
     }
 
-    /// Draw chat input field with caret - chat_x/chat_y is the top-left of chat_space2
-    fn draw_chat_input(&self, chat_x: f32, chat_y: f32) {
-        // Position text inside the chat input box, shifted right past the chat target icon
-        let text_x = chat_x + 35.0;  // Shifted more to the right to clear "all" chat icon
-        let text_y = chat_y + 14.0;  // Vertical centering (approximate)
+    /// Draw chat input field with caret
+    fn draw_chat_input(&self, text_x: f32, text_y: f32, has_chat_enter: bool) {
         let font_size = 12.0;
 
-        // Draw input text
-        draw_text(&self.chat_state.input_buffer, text_x, text_y, font_size, WHITE);
+        // Draw chat target prefix (e.g., "[party]", "[all]")
+        let target_prefix = format!("[{}] ", self.current_chat_target);
+        let prefix_color = if has_chat_enter {
+            Color::from_rgba(255, 255, 100, 255)  // Brighter when chatEnter is shown
+        } else {
+            Color::from_rgba(200, 200, 100, 255)
+        };
+        draw_text(&target_prefix, text_x, text_y, font_size, prefix_color);
+        let prefix_width = measure_text(&target_prefix, None, font_size as u16, 1.0).width;
 
-        // Draw blinking caret
-        if self.caret_visible {
+        // Draw input text
+        draw_text(&self.chat_state.input_buffer, text_x + prefix_width, text_y, font_size, WHITE);
+
+        // Draw blinking caret (only when focused)
+        if self.chat_focused && self.caret_visible {
             let text_width = measure_text(&self.chat_state.input_buffer, None, font_size as u16, 1.0).width;
-            draw_text("|", text_x + text_width, text_y, font_size, WHITE);
+            draw_text("|", text_x + prefix_width + text_width, text_y, font_size, WHITE);
         }
     }
 
@@ -1072,6 +1345,11 @@ impl StatusBarUI {
     pub fn is_loaded(&self) -> bool {
         self.loaded
     }
+
+    /// Check if chat is focused (for disabling character movement)
+    pub fn is_chat_focused(&self) -> bool {
+        self.chat_focused
+    }
 }
 
 impl Default for StatusBarUI {
@@ -1091,6 +1369,7 @@ struct StatusBarData {
     chat_space: Option<TextureWithOrigin>,
     chat_space2: Option<TextureWithOrigin>,
     chat_cover: Option<TextureWithOrigin>,
+    chat_enter: Option<TextureWithOrigin>,
     chat_targets: HashMap<String, TextureWithOrigin>,
     lv_numbers: Vec<TextureWithOrigin>,
     gauge_numbers: HashMap<String, TextureWithOrigin>,
@@ -1107,4 +1386,13 @@ struct StatusBarData {
     bt_character: Button,
     bt_stat: Button,
     bt_quest: Button,
+    bt_cashshop: Button,
+    bt_channel: Button,
+    bt_equip: Button,
+    bt_inven: Button,
+    bt_keysetting: Button,
+    bt_menu: Button,
+    bt_system: Button,
+    bt_skill: Button,
+    bt_mts: Button,
 }

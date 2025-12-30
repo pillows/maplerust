@@ -655,10 +655,14 @@ impl MapLoader {
             };
 
             // Adjust y position to place life entity on the nearest foothold below
-            let adjusted_y = if let Some((foothold_y, _fh)) = map_data.find_foothold_below(life_entry.x as f32, life_entry.y as f32) {
-                // Place the life entity on the foothold
-                // The origin_y represents the bottom of the sprite, so we subtract it to get proper positioning
-                (foothold_y - origin_y as f32) as i32
+            // Use the original Y position from the map data - the renderer handles origin offset
+            // Only snap to foothold if the entity has a foothold reference
+            let adjusted_y = if life_entry.foothold != 0 {
+                // Entity has a specific foothold - use original position (map data is authoritative)
+                life_entry.y
+            } else if let Some((foothold_y, _fh)) = map_data.find_foothold_below(life_entry.x as f32, life_entry.y as f32) {
+                // No specific foothold, snap to nearest foothold below
+                foothold_y as i32
             } else {
                 // No foothold found, use original y position
                 life_entry.y

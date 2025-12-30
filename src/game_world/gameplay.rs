@@ -7,6 +7,7 @@ use crate::game_world::bot_ai::BotAI;
 use crate::audio::AudioManager;
 use crate::cursor::{CursorManager, CursorState};
 use crate::character_info_ui::StatusBarUI;
+use crate::minimap::MiniMap;
 use futures;
 
 /// Gameplay state for when the player is in the game world
@@ -51,6 +52,8 @@ pub struct GameplayState {
     cursor_manager: CursorManager,
     // Status bar UI
     status_bar: StatusBarUI,
+    // MiniMap UI
+    minimap: MiniMap,
 }
 
 impl GameplayState {
@@ -91,6 +94,7 @@ impl GameplayState {
             last_dt: 0.016, // Default to ~60fps
             cursor_manager: CursorManager::new(),
             status_bar: StatusBarUI::new(),
+            minimap: MiniMap::new(),
         }
     }
 
@@ -102,10 +106,11 @@ impl GameplayState {
         let font_load = self.map_renderer.load_font();
         let cursor_load = self.cursor_manager.load_cursors();
         let status_bar_load = self.status_bar.load_assets();
+        let minimap_load = self.minimap.load_assets();
 
         // info!("Waiting for UI assets to load in parallel...");
         // Wait for all UI assets to load
-        let _ = futures::join!(font_load, cursor_load, status_bar_load);
+        let _ = futures::join!(font_load, cursor_load, status_bar_load, minimap_load);
 
         // info!("UI assets loaded. Font: ok, Cursors: {}, StatusBar: {}",
         //       self.cursor_manager.is_loaded(),
@@ -451,22 +456,27 @@ impl GameplayState {
         let base_speed = if free_roam { 350.0 } else { 200.0 };
         let move_speed = DebugFlags::get_player_speed(base_speed);
 
-        // Horizontal movement - no artificial boundaries
-        // Player movement is limited by footholds, not viewport bounds
-        if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
-            self.player_x -= move_speed * clamped_dt;
-        }
-        if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
-            self.player_x += move_speed * clamped_dt;
-        }
+        // Only allow player movement when chat is not focused
+        let can_move = !self.status_bar.is_chat_focused();
 
-        // Free-roam vertical movement (Space + Up/Down or W/S)
-        if free_roam {
-            if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-                self.player_y -= move_speed * clamped_dt;
+        if can_move {
+            // Horizontal movement - no artificial boundaries
+            // Player movement is limited by footholds, not viewport bounds
+            if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+                self.player_x -= move_speed * clamped_dt;
             }
-            if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-                self.player_y += move_speed * clamped_dt;
+            if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
+                self.player_x += move_speed * clamped_dt;
+            }
+
+            // Free-roam vertical movement (Space + Up/Down or W/S)
+            if free_roam {
+                if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+                    self.player_y -= move_speed * clamped_dt;
+                }
+                if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
+                    self.player_y += move_speed * clamped_dt;
+                }
             }
         }
         
@@ -532,7 +542,7 @@ impl GameplayState {
         }
 
         // Portal interaction or ladder grab - Check if player is near a portal/ladder and presses Up
-        if is_key_pressed(KeyCode::Up) && !free_roam {
+        if can_move && is_key_pressed(KeyCode::Up) && !free_roam {
             // Find nearby portals (within 40 pixels)
             let nearby_portal = map.portals.iter().find(|portal| {
                 let dx = (portal.x - self.player_x as i32).abs();
@@ -602,32 +612,34 @@ impl GameplayState {
             }) {
                 let climb_speed = 140.0;
 
-                if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-                    self.player_y -= climb_speed * clamped_dt;
-                }
-                if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-                    self.player_y += climb_speed * clamped_dt;
-                }
+                if can_move {
+                    if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+                        self.player_y -= climb_speed * clamped_dt;
+                    }
+                    if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
+                        self.player_y += climb_speed * clamped_dt;
+                    }
 
-                // Clamp within ladder segment
-                let min_y = ladder.y1.min(ladder.y2) as f32;
-                let max_y = ladder.y1.max(ladder.y2) as f32;
-                self.player_y = self.player_y.max(min_y).min(max_y);
+                    // Clamp within ladder segment
+                    let min_y = ladder.y1.min(ladder.y2) as f32;
+                    let max_y = ladder.y1.max(ladder.y2) as f32;
+                    self.player_y = self.player_y.max(min_y).min(max_y);
 
-                // Jump (Option) to dismount
-                if is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt) {
-                    self.on_ladder = false;
-                    self.current_ladder_id = None;
-                    self.player_vy = -400.0;
-                    self.on_ground = false;
-                }
+                    // Jump (Option) to dismount
+                    if is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt) {
+                        self.on_ladder = false;
+                        self.current_ladder_id = None;
+                        self.player_vy = -400.0;
+                        self.on_ground = false;
+                    }
 
-                // Move left/right to step off ladder
-                if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)
-                    || is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)
-                {
-                    self.on_ladder = false;
-                    self.current_ladder_id = None;
+                    // Move left/right to step off ladder
+                    if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)
+                        || is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)
+                    {
+                        self.on_ladder = false;
+                        self.current_ladder_id = None;
+                    }
                 }
             } else {
                 // Ladder disappeared or not found; exit ladder state
@@ -637,20 +649,22 @@ impl GameplayState {
         } else {
             // Normal physics with gravity and foothold snapping
 
-            // Drop through platform with Alt/Option + Down
-            let down_pressed = is_key_down(KeyCode::Down) || is_key_down(KeyCode::S);
-            let jump_pressed = is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt);
+            if can_move {
+                // Drop through platform with Alt/Option + Down
+                let down_pressed = is_key_down(KeyCode::Down) || is_key_down(KeyCode::S);
+                let jump_pressed = is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt);
 
-            if jump_pressed && down_pressed && self.on_ground {
-                // Drop through the current platform
-                self.drop_through_platform = true;
-                self.player_vy = 50.0; // Small downward velocity to start falling
-                self.on_ground = false;
-                info!("Player dropping through platform");
-            } else if jump_pressed && self.on_ground {
-                // Normal jump
-                self.player_vy = -400.0; // Jump velocity
-                self.on_ground = false;
+                if jump_pressed && down_pressed && self.on_ground {
+                    // Drop through the current platform
+                    self.drop_through_platform = true;
+                    self.player_vy = 50.0; // Small downward velocity to start falling
+                    self.on_ground = false;
+                    info!("Player dropping through platform");
+                } else if jump_pressed && self.on_ground {
+                    // Normal jump
+                    self.player_vy = -400.0; // Jump velocity
+                    self.on_ground = false;
+                }
             }
 
             // Apply gravity
@@ -815,6 +829,9 @@ impl GameplayState {
 
         // Update status bar UI
         self.status_bar.update(clamped_dt, &self.character);
+
+        // Update minimap
+        self.minimap.update();
     }
 
     /// Draw the game
@@ -897,6 +914,11 @@ impl GameplayState {
 
         // Draw status bar UI
         self.status_bar.draw(&self.character);
+
+        // Draw minimap
+        if let Some(map) = &self.map_data {
+            self.minimap.draw(self.player_x, self.player_y, map);
+        }
 
         // Draw custom MapleStory cursor (drawn last so it's on top)
         self.cursor_manager.draw();
