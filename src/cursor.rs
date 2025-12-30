@@ -40,7 +40,7 @@ impl CursorManager {
             current_state: CursorState::Default,
             current_frame: 0,
             frame_timer: 0.0,
-            frame_duration: 0.1, // 100ms per frame (10 FPS)
+            frame_duration: 0.3, // 300ms per frame (~3 FPS)
             loaded: false,
         }
     }

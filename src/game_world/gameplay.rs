@@ -6,6 +6,7 @@ use crate::map::portal_loader::PortalCache;
 use crate::game_world::bot_ai::BotAI;
 use crate::audio::AudioManager;
 use crate::cursor::{CursorManager, CursorState};
+use crate::character_info_ui::StatusBarUI;
 
 /// Gameplay state for when the player is in the game world
 pub struct GameplayState {
@@ -47,6 +48,8 @@ pub struct GameplayState {
     last_dt: f32,
     // Cursor manager
     cursor_manager: CursorManager,
+    // Status bar UI
+    status_bar: StatusBarUI,
 }
 
 impl GameplayState {
@@ -86,6 +89,7 @@ impl GameplayState {
             window_focused: true,
             last_dt: 0.016, // Default to ~60fps
             cursor_manager: CursorManager::new(),
+            status_bar: StatusBarUI::new(),
         }
     }
 
@@ -101,6 +105,9 @@ impl GameplayState {
 
         // Hide OS cursor so custom cursor can be used
         show_mouse(false);
+
+        // Load status bar UI
+        self.status_bar.load_assets().await;
 
         // Portal textures are now loaded during map parsing
         // Each portal has its own textures embedded in the Portal structure
@@ -826,6 +833,9 @@ impl GameplayState {
                 }
             }
         }
+
+        // Update status bar UI
+        self.status_bar.update(clamped_dt, &self.character);
     }
 
     /// Draw the game
@@ -905,6 +915,9 @@ impl GameplayState {
 
         // Draw UI
         self.draw_ui();
+
+        // Draw status bar UI
+        self.status_bar.draw(&self.character);
 
         // Draw custom MapleStory cursor (drawn last so it's on top)
         self.cursor_manager.draw();
@@ -1010,23 +1023,23 @@ impl GameplayState {
             self.draw_map_loader_ui();
         }
 
-        // Controls hint at bottom
-        let mut controls_text = "Controls: A/D or ← → to move | Alt to jump | ↑ on portal to enter".to_string();
-        if flags::CAMERA_DEBUG_MODE {
-            controls_text.push_str(" | Shift+Arrows: Camera");
-        }
-        if DebugFlags::should_show_debug_ui() {
-            controls_text.push_str(" | M: Load Map");
-        }
-        let font_size = 16.0;
-        let text_dimensions = measure_text(&controls_text, None, font_size as u16, 1.0);
-        draw_text(
-            &controls_text,
-            screen_width() / 2.0 - text_dimensions.width / 2.0,
-            screen_height() - 20.0,
-            font_size,
-            WHITE,
-        );
+        // Controls hint at bottom (commented out to show status bar UI)
+        // let mut controls_text = "Controls: A/D or ← → to move | Alt to jump | ↑ on portal to enter".to_string();
+        // if flags::CAMERA_DEBUG_MODE {
+        //     controls_text.push_str(" | Shift+Arrows: Camera");
+        // }
+        // if DebugFlags::should_show_debug_ui() {
+        //     controls_text.push_str(" | M: Load Map");
+        // }
+        // let font_size = 16.0;
+        // let text_dimensions = measure_text(&controls_text, None, font_size as u16, 1.0);
+        // draw_text(
+        //     &controls_text,
+        //     screen_width() / 2.0 - text_dimensions.width / 2.0,
+        //     screen_height() - 20.0,
+        //     font_size,
+        //     WHITE,
+        // );
     }
 
     /// Draw the debug map loader UI
