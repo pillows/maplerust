@@ -294,13 +294,15 @@ impl MiniMap {
 
         // Update button positions based on current mode and position
         let frame_width = self.get_frame_width();
+        let frame_height = self.get_frame_height();
         
         // Position buttons at top-right of minimap frame
-        self.bt_min.x = self.position.x + frame_width - 30.0;
-        self.bt_min.y = self.position.y + 5.0;
+        // BtMin (minimize) and BtMax (maximize/restore) buttons
+        self.bt_min.x = self.position.x + frame_width - 28.0;
+        self.bt_min.y = self.position.y + 3.0;
         
-        self.bt_max.x = self.position.x + frame_width - 15.0;
-        self.bt_max.y = self.position.y + 5.0;
+        self.bt_max.x = self.position.x + frame_width - 14.0;
+        self.bt_max.y = self.position.y + 3.0;
 
         // Update buttons
         self.bt_min.update();
@@ -309,13 +311,18 @@ impl MiniMap {
 
         // Handle button clicks
         if self.bt_min.is_clicked() {
-            self.mode = MiniMapMode::Min;
-        }
-        if self.bt_max.is_clicked() {
+            // Minimize button: toggle between Min and Normal
             self.mode = match self.mode {
                 MiniMapMode::Min => MiniMapMode::Normal,
-                MiniMapMode::Normal => MiniMapMode::Max,
+                _ => MiniMapMode::Min,
+            };
+        }
+        if self.bt_max.is_clicked() {
+            // Maximize button: toggle between Normal and Max
+            self.mode = match self.mode {
                 MiniMapMode::Max => MiniMapMode::Normal,
+                MiniMapMode::Normal => MiniMapMode::Max,
+                MiniMapMode::Min => MiniMapMode::Normal,
             };
         }
 
@@ -327,17 +334,17 @@ impl MiniMap {
 
     fn get_frame_width(&self) -> f32 {
         match self.mode {
-            MiniMapMode::Min => 100.0,
-            MiniMapMode::Normal => 150.0,
-            MiniMapMode::Max => 200.0,
+            MiniMapMode::Min => 150.0,
+            MiniMapMode::Normal => 180.0,
+            MiniMapMode::Max => 250.0,
         }
     }
 
     fn get_frame_height(&self) -> f32 {
         match self.mode {
-            MiniMapMode::Min => 20.0,
-            MiniMapMode::Normal => 100.0,
-            MiniMapMode::Max => 150.0,
+            MiniMapMode::Min => 18.0,
+            MiniMapMode::Normal => 120.0,
+            MiniMapMode::Max => 180.0,
         }
     }
 
@@ -354,29 +361,17 @@ impl MiniMap {
 
         match self.mode {
             MiniMapMode::Min => self.draw_min_mode(x, y, width, map),
-            MiniMapMode::Normal => self.draw_normal_mode(x, y, width, height, player_x, player_y, map),
-            MiniMapMode::Max => self.draw_normal_mode(x, y, width, height, player_x, player_y, map),
+            MiniMapMode::Normal | MiniMapMode::Max => self.draw_normal_mode(x, y, width, height, player_x, player_y, map),
         }
     }
 
     fn draw_min_mode(&self, x: f32, y: f32, width: f32, map: &MapData) {
         // Draw collapsed minimap (just a title bar)
-        if let Some(w) = &self.min_w {
-            draw_texture(w, x, y, WHITE);
-        }
+        let bar_height = 18.0;
         
-        // Draw center (stretched)
-        if let Some(c) = &self.min_c {
-            let c_width = width - 20.0; // Account for left/right edges
-            draw_texture_ex(c, x + 10.0, y, WHITE, DrawTextureParams {
-                dest_size: Some(Vec2::new(c_width, c.height())),
-                ..Default::default()
-            });
-        }
-        
-        if let Some(e) = &self.min_e {
-            draw_texture(e, x + width - e.width(), y, WHITE);
-        }
+        // Draw background bar
+        draw_rectangle(x, y, width, bar_height, Color::from_rgba(0, 0, 0, 180));
+        draw_rectangle_lines(x, y, width, bar_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
         // Draw map name
         let map_name = if !map.info.map_name.is_empty() {
@@ -384,70 +379,22 @@ impl MiniMap {
         } else {
             "Unknown"
         };
-        draw_text(map_name, x + 15.0, y + 14.0, 12.0, WHITE);
+        draw_text(map_name, x + 5.0, y + 13.0, 12.0, WHITE);
 
         // Draw buttons
+        self.bt_min.draw();
         self.bt_max.draw();
     }
 
     fn draw_normal_mode(&self, x: f32, y: f32, width: f32, height: f32, player_x: f32, player_y: f32, map: &MapData) {
-        // Draw 9-slice frame
-        let corner_size = 10.0;
-        let edge_thickness = 5.0;
+        // Draw semi-transparent background
+        draw_rectangle(x, y, width, height, Color::from_rgba(0, 0, 0, 180));
+        draw_rectangle_lines(x, y, width, height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw corners
-        if let Some(nw) = &self.minmap_nw {
-            draw_texture(nw, x, y, WHITE);
-        }
-        if let Some(ne) = &self.minmap_ne {
-            draw_texture(ne, x + width - corner_size, y, WHITE);
-        }
-        if let Some(sw) = &self.minmap_sw {
-            draw_texture(sw, x, y + height - corner_size, WHITE);
-        }
-        if let Some(se) = &self.minmap_se {
-            draw_texture(se, x + width - corner_size, y + height - corner_size, WHITE);
-        }
-
-        // Draw edges (stretched)
-        if let Some(n) = &self.minmap_n {
-            draw_texture_ex(n, x + corner_size, y, WHITE, DrawTextureParams {
-                dest_size: Some(Vec2::new(width - corner_size * 2.0, edge_thickness)),
-                ..Default::default()
-            });
-        }
-        if let Some(s) = &self.minmap_s {
-            draw_texture_ex(s, x + corner_size, y + height - edge_thickness, WHITE, DrawTextureParams {
-                dest_size: Some(Vec2::new(width - corner_size * 2.0, edge_thickness)),
-                ..Default::default()
-            });
-        }
-        if let Some(w) = &self.minmap_w {
-            draw_texture_ex(w, x, y + corner_size, WHITE, DrawTextureParams {
-                dest_size: Some(Vec2::new(edge_thickness, height - corner_size * 2.0)),
-                ..Default::default()
-            });
-        }
-        if let Some(e) = &self.minmap_e {
-            draw_texture_ex(e, x + width - edge_thickness, y + corner_size, WHITE, DrawTextureParams {
-                dest_size: Some(Vec2::new(edge_thickness, height - corner_size * 2.0)),
-                ..Default::default()
-            });
-        }
-
-        // Draw center (stretched)
-        if let Some(c) = &self.minmap_c {
-            draw_texture_ex(c, x + corner_size, y + corner_size, WHITE, DrawTextureParams {
-                dest_size: Some(Vec2::new(width - corner_size * 2.0, height - corner_size * 2.0)),
-                ..Default::default()
-            });
-        }
-
-        // Draw map content area
-        let content_x = x + corner_size;
-        let content_y = y + corner_size + 15.0; // Leave room for title
-        let content_width = width - corner_size * 2.0;
-        let content_height = height - corner_size * 2.0 - 15.0;
+        // Draw title bar
+        let title_height = 18.0;
+        draw_rectangle(x, y, width, title_height, Color::from_rgba(40, 40, 60, 220));
+        draw_line(x, y + title_height, x + width, y + title_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
         // Draw map name at top
         let map_name = if !map.info.map_name.is_empty() {
@@ -455,7 +402,13 @@ impl MiniMap {
         } else {
             "Unknown"
         };
-        draw_text(map_name, x + 15.0, y + 18.0, 11.0, WHITE);
+        draw_text(map_name, x + 5.0, y + 13.0, 11.0, WHITE);
+
+        // Draw map content area
+        let content_x = x + 5.0;
+        let content_y = y + title_height + 5.0;
+        let content_width = width - 10.0;
+        let content_height = height - title_height - 10.0;
 
         // Draw simplified map representation
         self.draw_map_content(content_x, content_y, content_width, content_height, player_x, player_y, map);

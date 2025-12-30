@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use crate::assets::AssetManager;
 use crate::character::CharacterData;
+use crate::cursor::CursorManager;
 use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType, WzNodeCast};
@@ -192,6 +193,9 @@ pub struct CharacterSelectionState {
     transition_duration: f32,
     transition_time: f32,
     is_transitioning_in: bool,
+
+    // Cursor manager
+    cursor_manager: CursorManager,
 }
 
 impl CharacterSelectionState {
@@ -230,6 +234,7 @@ impl CharacterSelectionState {
             transition_duration: 0.5,
             transition_time: 0.0,
             is_transitioning_in: true,
+            cursor_manager: CursorManager::new(),
         }
     }
 
@@ -258,6 +263,12 @@ impl CharacterSelectionState {
     /// Load all character selection screen assets from Login.img
     pub async fn load_assets(&mut self) {
         info!("Loading character selection screen assets...");
+
+        // Load cursor
+        self.cursor_manager.load_cursors().await;
+        if self.cursor_manager.is_loaded() {
+            show_mouse(false);
+        }
 
         let bytes = match AssetManager::fetch_and_cache(LOGIN_URL, LOGIN_CACHE_NAME).await {
             Ok(bytes) => bytes,
@@ -531,6 +542,9 @@ impl CharacterSelectionState {
         if self.page_right_button.is_clicked() {
             info!("Page right button clicked!");
         }
+
+        // Update cursor animation
+        self.cursor_manager.update(dt);
     }
 
     pub fn draw(&self) {
@@ -673,6 +687,9 @@ impl CharacterSelectionState {
         draw_button_with_fade(&self.new_button, alpha);
         draw_button_with_fade(&self.page_left_button, alpha);
         draw_button_with_fade(&self.page_right_button, alpha);
+
+        // Draw custom cursor (always on top)
+        self.cursor_manager.draw();
     }
 }
 

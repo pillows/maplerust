@@ -8,6 +8,11 @@ use crate::audio::AudioManager;
 use crate::cursor::{CursorManager, CursorState};
 use crate::character_info_ui::StatusBarUI;
 use crate::minimap::MiniMap;
+use crate::ui_windows::{InventoryWindow, EquipWindow};
+use crate::cash_shop::CashShop;
+use crate::key_config::KeyConfig;
+use crate::chat_balloon::ChatBalloonSystem;
+use crate::game_menu::{GameMenu, MenuAction};
 use futures;
 
 /// Gameplay state for when the player is in the game world
@@ -54,6 +59,14 @@ pub struct GameplayState {
     status_bar: StatusBarUI,
     // MiniMap UI
     minimap: MiniMap,
+    // UI Windows
+    inventory_window: InventoryWindow,
+    equip_window: EquipWindow,
+    // New UI components
+    cash_shop: CashShop,
+    key_config: KeyConfig,
+    chat_balloon: ChatBalloonSystem,
+    game_menu: GameMenu,
 }
 
 impl GameplayState {
@@ -95,6 +108,12 @@ impl GameplayState {
             cursor_manager: CursorManager::new(),
             status_bar: StatusBarUI::new(),
             minimap: MiniMap::new(),
+            inventory_window: InventoryWindow::new(),
+            equip_window: EquipWindow::new(),
+            cash_shop: CashShop::new(),
+            key_config: KeyConfig::new(),
+            chat_balloon: ChatBalloonSystem::new(),
+            game_menu: GameMenu::new(),
         }
     }
 
@@ -107,10 +126,18 @@ impl GameplayState {
         let cursor_load = self.cursor_manager.load_cursors();
         let status_bar_load = self.status_bar.load_assets();
         let minimap_load = self.minimap.load_assets();
+        let cash_shop_load = self.cash_shop.load_assets();
+        let key_config_load = self.key_config.load_assets();
+        let chat_balloon_load = self.chat_balloon.load_assets();
+        let game_menu_load = self.game_menu.load_assets();
+        let inventory_load = self.inventory_window.load_assets();
+        let equip_load = self.equip_window.load_assets();
 
         // info!("Waiting for UI assets to load in parallel...");
         // Wait for all UI assets to load
-        let _ = futures::join!(font_load, cursor_load, status_bar_load, minimap_load);
+        let _ = futures::join!(font_load, cursor_load, status_bar_load, minimap_load, 
+                               cash_shop_load, key_config_load, chat_balloon_load, game_menu_load,
+                               inventory_load, equip_load);
 
         // info!("UI assets loaded. Font: ok, Cursors: {}, StatusBar: {}",
         //       self.cursor_manager.is_loaded(),
@@ -596,6 +623,28 @@ impl GameplayState {
             }
         }
 
+        // Also check for grabbing ladder with Down key (when standing on top of a ladder)
+        if can_move && !self.on_ladder && self.on_ground && (is_key_pressed(KeyCode::Down) || is_key_pressed(KeyCode::S)) && !free_roam {
+            let px = self.player_x as i32;
+            let py = self.player_y as i32;
+
+            // Find ladder that starts near player's feet (player is standing on top of it)
+            if let Some(ladder) = map.ladders.iter().find(|lad| {
+                let dx = (lad.x - px).abs();
+                let top_y = lad.y1.min(lad.y2);
+                // Player's feet are at py + 30, ladder top should be close
+                dx <= 15 && (py + 30 - top_y).abs() <= 20
+            }) {
+                // Snap player to ladder X and enter ladder state
+                self.player_x = ladder.x as f32;
+                self.player_vy = 0.0;
+                self.on_ladder = true;
+                self.current_ladder_id = Some(ladder.id);
+                self.on_ground = false;
+                info!("Player grabbed ladder/rope from top id={} at x={}", ladder.id, ladder.x);
+            }
+        }
+
         // Handle vertical movement / physics
         if free_roam {
             // Free roam: no gravity or collision
@@ -611,19 +660,39 @@ impl GameplayState {
                 map.ladders.iter().find(|lad| lad.id == id)
             }) {
                 let climb_speed = 140.0;
+                let min_y = ladder.y1.min(ladder.y2) as f32;
+                let max_y = ladder.y1.max(ladder.y2) as f32;
 
                 if can_move {
                     if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
                         self.player_y -= climb_speed * clamped_dt;
+                        
+                        // Exit at top of ladder
+                        if self.player_y <= min_y {
+                            self.player_y = min_y - 30.0; // Place player above ladder
+                            self.on_ladder = false;
+                            self.current_ladder_id = None;
+                            self.on_ground = false; // Will snap to foothold on next frame
+                            info!("Player exited ladder at top");
+                        }
                     }
                     if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
                         self.player_y += climb_speed * clamped_dt;
+                        
+                        // Exit at bottom of ladder
+                        if self.player_y >= max_y {
+                            self.player_y = max_y;
+                            self.on_ladder = false;
+                            self.current_ladder_id = None;
+                            self.on_ground = false; // Will snap to foothold on next frame
+                            info!("Player exited ladder at bottom");
+                        }
                     }
 
-                    // Clamp within ladder segment
-                    let min_y = ladder.y1.min(ladder.y2) as f32;
-                    let max_y = ladder.y1.max(ladder.y2) as f32;
-                    self.player_y = self.player_y.max(min_y).min(max_y);
+                    // Clamp within ladder segment while climbing
+                    if self.on_ladder {
+                        self.player_y = self.player_y.max(min_y).min(max_y);
+                    }
 
                     // Jump (Option) to dismount
                     if is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt) {
@@ -655,11 +724,31 @@ impl GameplayState {
                 let jump_pressed = is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt);
 
                 if jump_pressed && down_pressed && self.on_ground {
-                    // Drop through the current platform
-                    self.drop_through_platform = true;
-                    self.player_vy = 50.0; // Small downward velocity to start falling
-                    self.on_ground = false;
-                    info!("Player dropping through platform");
+                    // Check if there's a platform below before allowing drop-through
+                    // Find current foothold
+                    if let Some(current_fh) = map.find_foothold_at(self.player_x, self.player_y + 30.0) {
+                        let current_fh_y = {
+                            let dx = current_fh.x2 - current_fh.x1;
+                            let dy = current_fh.y2 - current_fh.y1;
+                            let ix = self.player_x as i32;
+                            if dx != 0 {
+                                (current_fh.y1 + ((ix - current_fh.x1) * dy) / dx) as f32
+                            } else {
+                                current_fh.y1 as f32
+                            }
+                        };
+                        
+                        // Look for a platform below the current one
+                        if let Some((below_y, _)) = map.find_foothold_below(self.player_x, current_fh_y + 10.0) {
+                            // Only drop through if there's another platform below
+                            if below_y > current_fh_y + 20.0 {
+                                self.drop_through_platform = true;
+                                self.player_vy = 50.0; // Small downward velocity to start falling
+                                self.on_ground = false;
+                                info!("Player dropping through platform to y={}", below_y);
+                            }
+                        }
+                    }
                 } else if jump_pressed && self.on_ground {
                     // Normal jump
                     self.player_vy = -400.0; // Jump velocity
@@ -832,6 +921,55 @@ impl GameplayState {
 
         // Update minimap
         self.minimap.update();
+
+        // Update UI windows
+        self.inventory_window.update();
+        self.equip_window.update();
+
+        // Update new UI components
+        self.cash_shop.update();
+        self.key_config.update();
+        self.chat_balloon.update(clamped_dt);
+        self.game_menu.update();
+
+        // Handle game menu actions
+        match self.game_menu.take_action() {
+            MenuAction::Inventory => self.inventory_window.toggle(),
+            MenuAction::Equip => self.equip_window.toggle(),
+            MenuAction::KeyConfig => self.key_config.toggle(),
+            MenuAction::Quit => {
+                // TODO: Implement quit confirmation
+                info!("Quit requested from menu");
+            }
+            _ => {}
+        }
+
+        // Handle keyboard shortcuts for UI windows (only when chat is not focused and cash shop is not open)
+        if !self.status_bar.is_chat_focused() && !self.cash_shop.is_visible() {
+            // I key - toggle inventory
+            if is_key_pressed(KeyCode::I) {
+                self.inventory_window.toggle();
+            }
+            // E key - toggle equipment
+            if is_key_pressed(KeyCode::E) {
+                self.equip_window.toggle();
+            }
+            // K key - toggle key config
+            if is_key_pressed(KeyCode::K) {
+                self.key_config.toggle();
+            }
+        }
+
+        // Handle status bar button clicks
+        if self.status_bar.bt_cashshop_clicked() {
+            self.cash_shop.show();
+        }
+        if self.status_bar.bt_keysetting_clicked() {
+            self.key_config.toggle();
+        }
+        if self.status_bar.bt_menu_clicked() {
+            self.game_menu.toggle();
+        }
     }
 
     /// Draw the game
@@ -904,6 +1042,9 @@ impl GameplayState {
 
             // Render map foregrounds (in front of player)
             self.map_renderer.render_foreground(map, self.camera_x, self.camera_y, Some(&self.bot_ai));
+            
+            // Draw chat balloons (above NPCs/mobs)
+            self.chat_balloon.draw(self.camera_x, self.camera_y);
         } else {
             let text = "No map loaded";
             draw_text(text, 20.0, 40.0, 20.0, RED);
@@ -920,62 +1061,71 @@ impl GameplayState {
             self.minimap.draw(self.player_x, self.player_y, map);
         }
 
+        // Draw UI windows
+        self.inventory_window.draw();
+        self.equip_window.draw();
+
+        // Draw new UI windows
+        self.key_config.draw();
+        self.game_menu.draw();
+
+        // Draw CashShop (full screen overlay, drawn on top of everything except cursor)
+        self.cash_shop.draw();
+
         // Draw custom MapleStory cursor (drawn last so it's on top)
         self.cursor_manager.draw();
     }
 
     /// Draw the game UI
     fn draw_ui(&self) {
-        // Draw character info panel at top-left
-        let panel_x = 10.0;
-        let panel_y = 10.0;
-        let panel_width = 200.0;
-        let mut panel_height = 100.0;
-
-        // Extend panel if debug UI is enabled (need more space for map name)
-        if DebugFlags::should_show_debug_ui() {
-            panel_height = 200.0;
-        }
-
-        // Background
-        draw_rectangle(
-            panel_x,
-            panel_y,
-            panel_width,
-            panel_height,
-            Color::from_rgba(0, 0, 0, 180),
-        );
-
-        // Character name
-        draw_text(
-            &self.character.name,
-            panel_x + 10.0,
-            panel_y + 25.0,
-            20.0,
-            WHITE,
-        );
-
-        // Level
-        let level_text = format!("Level: {}", self.character.level);
-        draw_text(&level_text, panel_x + 10.0, panel_y + 45.0, 16.0, WHITE);
-
-        // HP
-        let hp_text = format!("HP: {}/{}", self.character.hp, self.character.hp);
-        draw_text(&hp_text, panel_x + 10.0, panel_y + 65.0, 16.0, GREEN);
-
-        // MP
-        let mp_text = format!("MP: {}/{}", self.character.mp, self.character.mp);
-        draw_text(&mp_text, panel_x + 10.0, panel_y + 85.0, 16.0, BLUE);
-
-        // Debug info
-        if DebugFlags::should_show_debug_ui() {
-            let mut y_offset = panel_y + 105.0;
-            let line_height = 20.0;
-            
+        // Draw FPS counter in top-right corner (always visible if SHOW_FPS is enabled)
+        if flags::SHOW_FPS {
             let fps = get_fps();
             let fps_text = format!("FPS: {}", fps);
-            draw_text(&fps_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
-            y_offset += line_height;
+            let text_width = measure_text(&fps_text, None, 14, 1.0).width;
+            draw_text(&fps_text, screen_width() - text_width - 10.0, 20.0, 14.0, YELLOW);
+        }
+
+        // Only show debug panel if debug UI is enabled
+        if DebugFlags::should_show_debug_ui() {
+            let panel_x = 10.0;
+            let panel_y = 10.0;
+            let panel_width = 200.0;
+            let panel_height = 200.0;
+
+            // Background
+            draw_rectangle(
+                panel_x,
+                panel_y,
+                panel_width,
+                panel_height,
+                Color::from_rgba(0, 0, 0, 180),
+            );
+
+            // Character name
+            draw_text(
+                &self.character.name,
+                panel_x + 10.0,
+                panel_y + 25.0,
+                20.0,
+                WHITE,
+            );
+
+            // Level
+            let level_text = format!("Level: {}", self.character.level);
+            draw_text(&level_text, panel_x + 10.0, panel_y + 45.0, 16.0, WHITE);
+
+            // HP
+            let hp_text = format!("HP: {}/{}", self.character.hp, self.character.hp);
+            draw_text(&hp_text, panel_x + 10.0, panel_y + 65.0, 16.0, GREEN);
+
+            // MP
+            let mp_text = format!("MP: {}/{}", self.character.mp, self.character.mp);
+            draw_text(&mp_text, panel_x + 10.0, panel_y + 85.0, 16.0, BLUE);
+
+            // Debug info
+            let mut y_offset = panel_y + 105.0;
+            let line_height = 20.0;
 
             // Map ID and name
             if let Some(map_data) = &self.map_data {

@@ -206,23 +206,21 @@ impl MapData {
     }
 
     /// Find foothold at position (for collision)
-    /// Returns the foothold that the point is closest to vertically, within reasonable horizontal range
-    /// Checks if player's center point is within the foothold bounds (player is 30px wide, extends 15px each side)
+    /// Returns the foothold that the point is standing on
+    /// Point must be within the foothold's horizontal bounds and close to its Y position
     pub fn find_foothold_at(&self, x: f32, y: f32) -> Option<&Foothold> {
         let ix = x as i32;
         let iy = y as i32;
 
         let mut best_fh: Option<&Foothold> = None;
-        let mut best_distance = 150.0; // Very lenient tolerance - don't restrict movement
+        let mut best_distance = 50.0; // Tighter tolerance for standing on platforms
 
         for fh in &self.footholds {
-            // Check if point is within horizontal range
-            // Player is 30px wide (15px on each side of center), so center must be within foothold bounds
-            // No extra margin - player falls off when center goes past edge
+            // Check if point is within horizontal range (strict - no margin)
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
 
-            // Player center must be within foothold range (no margin)
+            // Point must be within foothold horizontal bounds
             if ix >= min_x && ix <= max_x {
                 // Calculate Y position on this foothold at the given X
                 let dx = fh.x2 - fh.x1;
@@ -234,17 +232,14 @@ impl MapData {
                     fh.y1
                 };
 
-                // Check vertical distance (very lenient)
+                // Check vertical distance - must be close to the foothold
                 let vertical_distance = (iy as f32 - fh_y as f32).abs();
                 
-                // Accept any foothold that's reasonably close vertically
-                // This allows free horizontal movement, only constrains vertical position
+                // Accept footholds that are close vertically (within 50px)
+                // Prefer footholds that are at or slightly below the point
                 if vertical_distance < best_distance {
-                    // Accept footholds below or slightly above (within 100px)
-                    if fh_y as f32 >= iy as f32 - 100.0 || vertical_distance < 100.0 {
-                        best_distance = vertical_distance;
-                        best_fh = Some(fh);
-                    }
+                    best_distance = vertical_distance;
+                    best_fh = Some(fh);
                 }
             }
         }
@@ -253,7 +248,7 @@ impl MapData {
     }
 
     /// Find the nearest foothold below a position (for spawning/falling)
-    /// Very lenient - allows finding footholds even if slightly outside horizontal range
+    /// Strict horizontal bounds - point must be within foothold range
     pub fn find_foothold_below(&self, x: f32, y: f32) -> Option<(f32, &Foothold)> {
         let ix = x as i32;
         let iy = y as i32;
@@ -262,12 +257,12 @@ impl MapData {
         let mut closest_fh = None;
 
         for fh in &self.footholds {
-            // Check if point is within horizontal range (with generous margin)
+            // Check if point is within horizontal range (strict - no margin)
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
             
-            // Very generous margin (100 pixels) - don't restrict movement
-            if ix >= min_x - 100 && ix <= max_x + 100 {
+            // Point must be within foothold horizontal bounds
+            if ix >= min_x && ix <= max_x {
                 // Calculate Y position on this foothold at the given X
                 let dx = fh.x2 - fh.x1;
                 let dy = fh.y2 - fh.y1;
@@ -278,9 +273,9 @@ impl MapData {
                     fh.y1
                 };
 
-                // Only consider footholds below the position
-                if fh_y >= iy {
-                    // Find the closest one
+                // Only consider footholds below or at the position (with small tolerance)
+                if fh_y >= iy - 10 {
+                    // Find the closest one below
                     if closest_y.is_none() || fh_y < closest_y.unwrap() {
                         closest_y = Some(fh_y);
                         closest_fh = Some(fh);
@@ -290,5 +285,23 @@ impl MapData {
         }
 
         closest_fh.map(|fh| (closest_y.unwrap() as f32, fh))
+    }
+
+    /// Find foothold by ID
+    pub fn find_foothold_by_id(&self, id: i32) -> Option<&Foothold> {
+        self.footholds.iter().find(|fh| fh.id == id)
+    }
+
+    /// Get Y position on a foothold at given X
+    pub fn get_foothold_y_at(&self, fh: &Foothold, x: f32) -> f32 {
+        let ix = x as i32;
+        let dx = fh.x2 - fh.x1;
+        let dy = fh.y2 - fh.y1;
+
+        if dx != 0 {
+            (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+        } else {
+            fh.y1 as f32
+        }
     }
 }

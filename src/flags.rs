@@ -16,6 +16,9 @@ pub const DEFAULT_MOVABLE_MODE: bool = false;
 /// Enable debug UI overlays (FPS, coordinates, etc.)
 pub const SHOW_DEBUG_UI: bool = true;
 
+/// Show FPS counter (separate from full debug UI)
+pub const SHOW_FPS: bool = true;
+
 /// Enable verbose logging for asset loading
 pub const VERBOSE_ASSET_LOADING: bool = false;
 

@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use crate::assets::AssetManager;
+use crate::cursor::CursorManager;
 use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzObjectType, WzNodeCast};
@@ -227,6 +228,9 @@ pub struct LoginState {
     loading_animation_time: f32,
     loading_current_frame: usize,
     loading_bar_current_frame: usize,
+
+    // Cursor manager
+    cursor_manager: CursorManager,
 }
 
 impl LoginState {
@@ -286,12 +290,21 @@ impl LoginState {
             loading_animation_time: 0.0,
             loading_current_frame: 0,
             loading_bar_current_frame: 0,
+            cursor_manager: CursorManager::new(),
         }
     }
 
     /// Load all login screen assets from Login.img
     pub async fn load_assets(&mut self) {
         info!("Loading login screen assets...");
+
+        // Load cursor in parallel with other assets
+        self.cursor_manager.load_cursors().await;
+        
+        // Hide OS cursor if custom cursors loaded
+        if self.cursor_manager.is_loaded() {
+            show_mouse(false);
+        }
 
         // Fetch and parse the WZ file once
         let bytes = match AssetManager::fetch_and_cache(LOGIN_URL, LOGIN_CACHE_NAME).await {
@@ -758,6 +771,9 @@ impl LoginState {
         if self.quit_button.is_clicked() {
             info!("Quit button clicked!");
         }
+
+        // Update cursor animation
+        self.cursor_manager.update(dt);
     }
 
     pub fn draw(&self) {
@@ -973,6 +989,9 @@ impl LoginState {
             // Draw cancel button
             self.loading_cancel_button.draw();
         }
+
+        // Draw custom cursor (always on top)
+        self.cursor_manager.draw();
     }
 
     /// Check if should transition to character selection screen

@@ -187,9 +187,10 @@ impl MapRenderer {
             let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
             let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
 
-            // Screen culling - skip tiles outside view (with margin for tile size)
-            if screen_x < -100.0 || screen_x > screen_width + 100.0
-                || screen_y < -100.0 || screen_y > screen_height + 100.0 {
+            // Screen culling - skip tiles outside view (with large margin for big tiles)
+            // Use 500px margin to prevent pop-in for large tiles
+            if screen_x < -500.0 || screen_x > screen_width + 500.0
+                || screen_y < -500.0 || screen_y > screen_height + 500.0 {
                 continue;
             }
 
@@ -227,9 +228,10 @@ impl MapRenderer {
             let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
             let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
 
-            // Screen culling - skip objects outside view (with generous margin)
-            if screen_x < -200.0 || screen_x > screen_width + 200.0
-                || screen_y < -200.0 || screen_y > screen_height + 200.0 {
+            // Screen culling - skip objects outside view (with large margin)
+            // Use 500px margin to prevent pop-in for large objects
+            if screen_x < -500.0 || screen_x > screen_width + 500.0
+                || screen_y < -500.0 || screen_y > screen_height + 500.0 {
                 continue;
             }
 
@@ -279,25 +281,18 @@ impl MapRenderer {
                     (life.x as f32, life.y as f32, life.flip)
                 }
             } else {
-                // NPCs use static positions, but snap Y to foothold if available
-                let mut npc_x = life.x as f32;
+                // NPCs use static positions, but snap Y to foothold
+                let npc_x = life.x as f32;
                 let mut npc_y = life.y as f32;
                 
-                // Snap NPC to foothold if it has one
+                // First try to snap NPC to its specified foothold
                 if life.foothold != 0 {
                     if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
-                        // Calculate Y position on the foothold at NPC's X
-                        let dx = fh.x2 - fh.x1;
-                        let dy = fh.y2 - fh.y1;
-                        let ix = npc_x as i32;
-                        
-                        let fh_y = if dx != 0 {
-                            (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-                        } else {
-                            fh.y1 as f32
-                        };
-                        
-                        // Use foothold Y, but keep original X
+                        npc_y = map.get_foothold_y_at(fh, npc_x);
+                    }
+                } else {
+                    // No foothold specified, find the nearest one below
+                    if let Some((fh_y, _)) = map.find_foothold_below(npc_x, npc_y) {
                         npc_y = fh_y;
                     }
                 }

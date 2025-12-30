@@ -1350,6 +1350,21 @@ impl StatusBarUI {
     pub fn is_chat_focused(&self) -> bool {
         self.chat_focused
     }
+
+    /// Check if cash shop button was clicked
+    pub fn bt_cashshop_clicked(&self) -> bool {
+        self.bt_cashshop.is_clicked()
+    }
+
+    /// Check if key setting button was clicked
+    pub fn bt_keysetting_clicked(&self) -> bool {
+        self.bt_keysetting.is_clicked()
+    }
+
+    /// Check if menu button was clicked
+    pub fn bt_menu_clicked(&self) -> bool {
+        self.bt_menu.is_clicked()
+    }
 }
 
 impl Default for StatusBarUI {

@@ -12,6 +12,11 @@ mod audio;
 mod cursor;
 mod character_info_ui;
 mod minimap;
+mod ui_windows;
+mod cash_shop;
+mod key_config;
+mod chat_balloon;
+mod game_menu;
 
 #[macroquad::main("RustMaple")]
 async fn main() {
