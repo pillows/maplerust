@@ -207,7 +207,7 @@ impl MapData {
 
     /// Find foothold at position (for collision)
     /// Returns the foothold that the point is closest to vertically, within reasonable horizontal range
-    /// Very lenient - allows movement anywhere, only snaps to footholds when actually on them
+    /// Checks if player's center point is within the foothold bounds (player is 30px wide, extends 15px each side)
     pub fn find_foothold_at(&self, x: f32, y: f32) -> Option<&Foothold> {
         let ix = x as i32;
         let iy = y as i32;
@@ -216,12 +216,14 @@ impl MapData {
         let mut best_distance = 150.0; // Very lenient tolerance - don't restrict movement
 
         for fh in &self.footholds {
-            // Check if point is within horizontal range (with small margin)
+            // Check if point is within horizontal range
+            // Player is 30px wide (15px on each side of center), so center must be within foothold bounds
+            // No extra margin - player falls off when center goes past edge
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
 
-            // Small margin (5 pixels) to match actual platform edges better
-            if ix >= min_x - 5 && ix <= max_x + 5 {
+            // Player center must be within foothold range (no margin)
+            if ix >= min_x && ix <= max_x {
                 // Calculate Y position on this foothold at the given X
                 let dx = fh.x2 - fh.x1;
                 let dy = fh.y2 - fh.y1;

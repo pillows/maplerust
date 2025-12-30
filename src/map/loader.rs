@@ -266,6 +266,10 @@ impl MapLoader {
         map_data.info.vr_left = Self::get_int_property(&node_read, "VRLeft").unwrap_or(0);
         map_data.info.vr_bottom = Self::get_int_property(&node_read, "VRBottom").unwrap_or(600);
         map_data.info.vr_right = Self::get_int_property(&node_read, "VRRight").unwrap_or(800);
+        
+        info!("Map viewport bounds loaded: VR_TOP={}, VR_BOTTOM={}, VR_LEFT={}, VR_RIGHT={}", 
+              map_data.info.vr_top, map_data.info.vr_bottom, 
+              map_data.info.vr_left, map_data.info.vr_right);
 
         map_data.info.bgm = Self::get_string_property(&node_read, "bgm").unwrap_or_default();
         map_data.info.map_mark = Self::get_string_property(&node_read, "mapMark").unwrap_or_default();
@@ -798,15 +802,20 @@ impl MapLoader {
 
         // THIRD PASS: Now load textures (WZ files should be cached) and create tiles
         info!("Loading {} individual tile textures...", tile_requests.len());
+        let mut failed_tiles = 0;
+        let mut successful_tiles = 0;
+
         for (tile_id, layer_num, tileset, u, no, x, y, z_m) in tile_data {
             // Load tile texture if tileset is specified
             let (texture, origin_x, origin_y) = if !tileset.is_empty() && !u.is_empty() {
                 match tile_cache.get_or_load_tile(&tileset, &u, no).await {
                     Some((tex, ox, oy)) => {
+                        successful_tiles += 1;
                         (Some(tex), ox, oy)
                     }
                     None => {
-                        warn!("    Failed to load tile texture: {}/{}/{}", tileset, u, no);
+                        failed_tiles += 1;
+                        warn!("    Failed to load tile: {}/{}/{} (tile ID: {})", tileset, u, no, tile_id);
                         (None, 0, 0)
                     }
                 }
@@ -829,6 +838,14 @@ impl MapLoader {
             };
 
             map_data.tiles.push(tile);
+        }
+
+        if failed_tiles > 0 {
+            warn!("⚠ Tile loading summary: {} succeeded, {} FAILED ({}% success rate)",
+                  successful_tiles, failed_tiles,
+                  (successful_tiles * 100) / (successful_tiles + failed_tiles));
+        } else {
+            info!("✓ All {} tiles loaded successfully", successful_tiles);
         }
 
         Ok(())
@@ -913,15 +930,20 @@ impl MapLoader {
 
         // THIRD PASS: Now load textures (WZ files should be cached) and create objects
         info!("Loading {} individual object textures...", object_data.len());
+        let mut failed_objects = 0;
+        let mut successful_objects = 0;
+
         for (obj_id, layer_num, oS, l0, l1, l2, x, y, z, z_m, f, r) in object_data {
             // Load object texture if object set is specified
             let (texture, origin_x, origin_y) = if !oS.is_empty() && !l0.is_empty() {
                 match object_cache.get_or_load_object(&oS, &l0, &l1, &l2).await {
                     Some((tex, ox, oy)) => {
+                        successful_objects += 1;
                         (Some(tex), ox, oy)
                     }
                     None => {
-                        warn!("    Failed to load object texture: {}/{}/{}/{}", oS, l0, l1, l2);
+                        failed_objects += 1;
+                        warn!("    Failed to load object: {}/{}/{}/{} (object ID: {})", oS, l0, l1, l2, obj_id);
                         (None, 0, 0)
                     }
                 }
@@ -948,6 +970,14 @@ impl MapLoader {
             };
 
             map_data.objects.push(object);
+        }
+
+        if failed_objects > 0 {
+            warn!("⚠ Object loading summary: {} succeeded, {} FAILED ({}% success rate)",
+                  successful_objects, failed_objects,
+                  (successful_objects * 100) / (successful_objects + failed_objects));
+        } else if successful_objects > 0 {
+            info!("✓ All {} objects loaded successfully", successful_objects);
         }
 
         Ok(())

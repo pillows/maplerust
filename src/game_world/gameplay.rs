@@ -174,6 +174,12 @@ impl GameplayState {
                 let vr_top = map.info.vr_top as f32;
                 let vr_bottom = map.info.vr_bottom as f32;
 
+                // Log viewport bounds for debugging
+                info!("Map viewport bounds:");
+                info!("  VR_LEFT: {}, VR_RIGHT: {}", vr_left, vr_right);
+                info!("  VR_TOP: {}, VR_BOTTOM: {}", vr_top, vr_bottom);
+                info!("  Map width: {}, Map height: {}", vr_right - vr_left, vr_bottom - vr_top);
+
                 // Calculate and cache foothold extent
                 self.foothold_min_x = vr_left;
                 self.foothold_max_x = vr_right;
@@ -204,15 +210,17 @@ impl GameplayState {
                     self.bgm_pending = false;
                 }
 
-                // Initialize camera position - center on player but clamp to foothold extent
+                // Initialize camera position - center on player but clamp to boundaries
                 let target_camera_x = self.player_x - screen_width() / 2.0;
                 let target_camera_y = self.player_y - screen_height() / 2.0;
 
+                // Clamp X to foothold extent
                 self.camera_x = target_camera_x
                     .max(self.foothold_min_x)
                     .min(self.foothold_max_x - screen_width());
+
+                // Clamp Y only to bottom boundary (no top constraint)
                 self.camera_y = target_camera_y
-                    .max(vr_top)
                     .min(vr_bottom - screen_height());
 
                 // Clear target portal name after successful spawn
@@ -706,16 +714,20 @@ impl GameplayState {
         // If you walk off a platform, you fall (and hit bottom boundary eventually)
 
         // Bottom boundary - if player hits bottom, stop them and set on ground
-        if self.player_y >= map.info.vr_bottom as f32 {
-            self.player_y = map.info.vr_bottom as f32;
+        let vr_top = map.info.vr_top as f32;
+        let vr_bottom = map.info.vr_bottom as f32;
+        
+        // Bottom boundary - prevent falling through the bottom of the world
+        if self.player_y >= vr_bottom {
+            info!("Player Y ({}) >= VR_BOTTOM ({}), clamping to floor", self.player_y, vr_bottom);
+            self.player_y = vr_bottom;
             self.player_vy = 0.0;
             self.on_ground = true;
         }
 
-        // Top boundary
-        if self.player_y < map.info.vr_top as f32 {
-            self.player_y = map.info.vr_top as f32;
-        }
+        // NOTE: VRTop is removed - it's a CAMERA boundary, not a player boundary
+        // Players should be free to jump/climb to any height allowed by footholds/ladders
+        // The camera is clamped to VRTop separately (see camera update code below)
 
         // Update bot AI
         self.bot_ai.update(clamped_dt, map);
@@ -726,14 +738,20 @@ impl GameplayState {
             let target_camera_x = self.player_x - screen_width() / 2.0;
             let target_camera_y = self.player_y - screen_height() / 2.0;
 
-            // Clamp camera to foothold extent (not just viewport)
+            // Clamp camera X to foothold extent (not just viewport)
             // This allows camera to follow player to actual platform edges
             self.camera_x = target_camera_x
                 .max(self.foothold_min_x)
                 .min(self.foothold_max_x - screen_width());
-            self.camera_y = target_camera_y
-                .max(map.info.vr_top as f32)
-                .min(map.info.vr_bottom as f32 - screen_height());
+
+            // Camera Y: Only clamp to bottom boundary, not top
+            // VRTop is a guideline but camera should follow player everywhere
+            let vr_bottom = map.info.vr_bottom as f32;
+            let screen_h = screen_height();
+            let max_camera_y = vr_bottom - screen_h;
+
+            // Only clamp to bottom - no top constraint so camera can follow player upwards
+            self.camera_y = target_camera_y.min(max_camera_y);
         } else{
             // Camera debug mode - move camera independently with arrow keys + Shift
             let camera_speed = 300.0;
