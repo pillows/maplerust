@@ -1,3 +1,4 @@
+#[allow(non_snake_case)]
 use macroquad::prelude::*;
 
 /// Complete map data structure
@@ -324,6 +325,41 @@ impl MapData {
         }
 
         closest_fh.map(|fh| (closest_y.unwrap() as f32, fh))
+    }
+
+    /// Check if there's a wall (steep foothold) blocking horizontal movement
+    /// Returns true if movement is blocked
+    pub fn is_wall_blocking(&self, from_x: f32, to_x: f32, y: f32) -> bool {
+        let iy = y as i32;
+        let moving_right = to_x > from_x;
+        
+        for fh in &self.footholds {
+            let min_x = fh.x1.min(fh.x2) as f32;
+            let max_x = fh.x1.max(fh.x2) as f32;
+            
+            // Check if this foothold is in our path
+            let fh_in_path = if moving_right {
+                min_x > from_x && min_x <= to_x
+            } else {
+                max_x < from_x && max_x >= to_x
+            };
+            
+            if fh_in_path {
+                let dx = (fh.x2 - fh.x1).abs();
+                let dy = (fh.y2 - fh.y1).abs();
+                
+                // If the foothold is more vertical than horizontal, it's a wall
+                if dy > dx * 2 {
+                    let wall_min_y = fh.y1.min(fh.y2);
+                    let wall_max_y = fh.y1.max(fh.y2);
+                    if iy >= wall_min_y && iy <= wall_max_y {
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        false
     }
 
     /// Find foothold by ID

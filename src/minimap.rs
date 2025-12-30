@@ -343,13 +343,13 @@ impl MiniMap {
     fn get_frame_height(&self) -> f32 {
         match self.mode {
             MiniMapMode::Min => 22.0,
-            MiniMapMode::Normal => 140.0,
-            MiniMapMode::Max => 220.0,  // Larger for maximized mode
+            MiniMapMode::Normal => 150.0,  // Increased to accommodate title bar with icon
+            MiniMapMode::Max => 230.0,  // Larger for maximized mode
         }
     }
 
     /// Draw the minimap
-    pub fn draw(&self, player_x: f32, player_y: f32, map: &MapData) {
+    pub fn draw(&self, player_x: f32, player_y: f32, map: &MapData, camera_x: f32, camera_y: f32) {
         if !self.loaded || !self.visible {
             return;
         }
@@ -361,7 +361,7 @@ impl MiniMap {
 
         match self.mode {
             MiniMapMode::Min => self.draw_min_mode(x, y, width, map),
-            MiniMapMode::Normal | MiniMapMode::Max => self.draw_normal_mode(x, y, width, height, player_x, player_y, map),
+            MiniMapMode::Normal | MiniMapMode::Max => self.draw_normal_mode(x, y, width, height, player_x, player_y, map, camera_x, camera_y),
         }
     }
 
@@ -386,13 +386,13 @@ impl MiniMap {
         self.bt_max.draw();
     }
 
-    fn draw_normal_mode(&self, x: f32, y: f32, width: f32, height: f32, player_x: f32, player_y: f32, map: &MapData) {
+    fn draw_normal_mode(&self, x: f32, y: f32, width: f32, height: f32, player_x: f32, player_y: f32, map: &MapData, camera_x: f32, camera_y: f32) {
         // Draw semi-transparent background
         draw_rectangle(x, y, width, height, Color::from_rgba(0, 0, 0, 200));
         draw_rectangle_lines(x, y, width, height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw title bar with larger height for better map name display
-        let title_height = 24.0;
+        // Draw title bar with larger height for better map name display and icon space
+        let title_height = 32.0;  // Increased to accommodate icon
         draw_rectangle(x, y, width, title_height, Color::from_rgba(40, 40, 60, 230));
         draw_line(x, y + title_height, x + width, y + title_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
@@ -403,69 +403,109 @@ impl MiniMap {
             "Unknown"
         };
         let font_size = if self.mode == MiniMapMode::Max { 16.0 } else { 14.0 };
-        draw_text(map_name, x + 8.0, y + 17.0, font_size, WHITE);
+        draw_text(map_name, x + 8.0, y + 20.0, font_size, WHITE);
 
-        // Draw map content area
+        // Draw map content area (below title bar)
         let content_x = x + 5.0;
         let content_y = y + title_height + 5.0;
         let content_width = width - 10.0;
         let content_height = height - title_height - 10.0;
 
-        // Draw simplified map representation
-        self.draw_map_content(content_x, content_y, content_width, content_height, player_x, player_y, map);
+        // Draw simplified map representation (only viewable area)
+        self.draw_map_content(content_x, content_y, content_width, content_height, player_x, player_y, map, camera_x, camera_y);
 
         // Draw buttons
         self.bt_min.draw();
         self.bt_max.draw();
     }
 
-    fn draw_map_content(&self, x: f32, y: f32, width: f32, height: f32, player_x: f32, player_y: f32, map: &MapData) {
-        // Calculate scale to fit map in minimap area
-        let map_width = map.get_width() as f32;
-        let map_height = map.get_height() as f32;
+    fn draw_map_content(&self, x: f32, y: f32, width: f32, height: f32, player_x: f32, player_y: f32, map: &MapData, camera_x: f32, camera_y: f32) {
+        // Get screen dimensions to calculate viewable area
+        let screen_w = screen_width();
+        let screen_h = screen_height();
         
-        if map_width <= 0.0 || map_height <= 0.0 {
+        // Calculate viewable area in world coordinates
+        let view_left = camera_x;
+        let view_top = camera_y;
+        let view_right = camera_x + screen_w;
+        let view_bottom = camera_y + screen_h;
+        
+        // Calculate scale to fit viewable area in minimap
+        let view_width = view_right - view_left;
+        let view_height = view_bottom - view_top;
+        
+        if view_width <= 0.0 || view_height <= 0.0 {
             return;
         }
 
-        let scale_x = width / map_width;
-        let scale_y = height / map_height;
+        let scale_x = width / view_width;
+        let scale_y = height / view_height;
         let scale = scale_x.min(scale_y);
 
-        let map_left = map.info.vr_left as f32;
-        let map_top = map.info.vr_top as f32;
+        // Draw viewable area background
+        let view_x = x;
+        let view_y = y;
+        let view_display_width = view_width * scale;
+        let view_display_height = view_height * scale;
+        
+        // Draw semi-transparent rectangle for viewable area
+        draw_rectangle_lines(view_x, view_y, view_display_width, view_display_height, 2.0, Color::from_rgba(255, 255, 0, 200));
 
-        // Draw footholds as lines
+        // Only draw elements within or near the viewable area
+        let margin = 200.0; // Draw elements slightly outside view for context
+        
+        // Draw footholds as lines (only those in viewable area)
         for fh in &map.footholds {
-            let x1 = x + (fh.x1 as f32 - map_left) * scale;
-            let y1 = y + (fh.y1 as f32 - map_top) * scale;
-            let x2 = x + (fh.x2 as f32 - map_left) * scale;
-            let y2 = y + (fh.y2 as f32 - map_top) * scale;
+            // Check if foothold is in or near viewable area
+            let fh_left = fh.x1.min(fh.x2) as f32;
+            let fh_right = fh.x1.max(fh.x2) as f32;
+            let fh_top = fh.y1.min(fh.y2) as f32;
+            let fh_bottom = fh.y1.max(fh.y2) as f32;
             
-            draw_line(x1, y1, x2, y2, 1.0, Color::from_rgba(100, 100, 100, 200));
+            if fh_right >= view_left - margin && fh_left <= view_right + margin &&
+               fh_bottom >= view_top - margin && fh_top <= view_bottom + margin {
+                let x1 = x + (fh.x1 as f32 - view_left) * scale;
+                let y1 = y + (fh.y1 as f32 - view_top) * scale;
+                let x2 = x + (fh.x2 as f32 - view_left) * scale;
+                let y2 = y + (fh.y2 as f32 - view_top) * scale;
+                
+                draw_line(x1, y1, x2, y2, 1.0, Color::from_rgba(100, 100, 100, 200));
+            }
         }
 
-        // Draw portals as small circles
+        // Draw portals as small circles (only those in viewable area)
         for portal in &map.portals {
             if portal.pt == 2 || portal.pt == 7 { // Regular portals
-                let px = x + (portal.x as f32 - map_left) * scale;
-                let py = y + (portal.y as f32 - map_top) * scale;
-                draw_circle(px, py, 3.0, Color::from_rgba(0, 200, 255, 200));
+                let px = portal.x as f32;
+                let py = portal.y as f32;
+                
+                if px >= view_left - margin && px <= view_right + margin &&
+                   py >= view_top - margin && py <= view_bottom + margin {
+                    let mini_px = x + (px - view_left) * scale;
+                    let mini_py = y + (py - view_top) * scale;
+                    draw_circle(mini_px, mini_py, 3.0, Color::from_rgba(0, 200, 255, 200));
+                }
             }
         }
 
-        // Draw NPCs as small dots
+        // Draw NPCs as small dots (only those in viewable area)
         for life in &map.life {
             if life.life_type == "n" && !life.hide {
-                let lx = x + (life.x as f32 - map_left) * scale;
-                let ly = y + (life.y as f32 - map_top) * scale;
-                draw_circle(lx, ly, 2.0, Color::from_rgba(255, 255, 0, 200));
+                let lx = life.x as f32;
+                let ly = life.y as f32;
+                
+                if lx >= view_left - margin && lx <= view_right + margin &&
+                   ly >= view_top - margin && ly <= view_bottom + margin {
+                    let mini_lx = x + (lx - view_left) * scale;
+                    let mini_ly = y + (ly - view_top) * scale;
+                    draw_circle(mini_lx, mini_ly, 2.0, Color::from_rgba(255, 255, 0, 200));
+                }
             }
         }
 
-        // Draw player position
-        let player_mini_x = x + (player_x - map_left) * scale;
-        let player_mini_y = y + (player_y - map_top) * scale;
+        // Draw player position (centered in viewable area)
+        let player_mini_x = x + (player_x - view_left) * scale;
+        let player_mini_y = y + (player_y - view_top) * scale;
         
         // Player marker (small triangle or dot)
         draw_circle(player_mini_x, player_mini_y, 3.0, Color::from_rgba(255, 100, 100, 255));

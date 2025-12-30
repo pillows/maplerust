@@ -14,7 +14,7 @@ pub const SKIP_TO_GAME: bool = true;
 pub const DEFAULT_MOVABLE_MODE: bool = false;
 
 /// Enable debug UI overlays (FPS, coordinates, etc.)
-pub const SHOW_DEBUG_UI: bool = true;
+pub const SHOW_DEBUG_UI: bool = false;
 
 /// Show FPS counter (separate from full debug UI)
 pub const SHOW_FPS: bool = true;
@@ -23,7 +23,7 @@ pub const SHOW_FPS: bool = true;
 pub const VERBOSE_ASSET_LOADING: bool = false;
 
 /// Enable verbose logging for character save/load operations
-pub const VERBOSE_CHARACTER_IO: bool = true;
+pub const VERBOSE_CHARACTER_IO: bool = false;
 
 /// Use in-memory storage instead of persistent storage (for testing)
 pub const USE_MEMORY_STORAGE: bool = false;
@@ -69,6 +69,9 @@ pub const GOD_MODE: bool = false;
 
 /// Start with max stats
 pub const START_WITH_MAX_STATS: bool = false;
+
+/// Enable verbose map loading logs
+pub const VERBOSE_MAP_LOADING: bool = false;
 
 impl DebugFlags {
     /// Check if we should skip directly to a specific state

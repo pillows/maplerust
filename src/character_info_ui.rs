@@ -141,6 +141,7 @@ struct ChatMessage {
 struct ChatState {
     messages: Vec<ChatMessage>,
     input_buffer: String,
+    cursor_position: usize,  // Cursor position in input buffer
     scroll_offset: usize,
     max_visible_lines: usize,
     last_sent_message: Option<String>,  // Track last sent message for balloon display
@@ -151,6 +152,7 @@ impl ChatState {
         Self {
             messages: Vec::new(),
             input_buffer: String::new(),
+            cursor_position: 0,
             scroll_offset: 0,
             max_visible_lines: 5,
             last_sent_message: None,
@@ -677,6 +679,7 @@ impl StatusBarUI {
         if is_key_pressed(KeyCode::Escape) && self.chat_focused {
             self.chat_focused = false;
             self.chat_state.input_buffer.clear();
+            self.chat_state.cursor_position = 0;
         }
 
         // Handle chat target selection with keys 1-6 (only when chat is NOT focused)
@@ -930,13 +933,62 @@ impl StatusBarUI {
 
     /// Handle chat input
     fn handle_chat_input(&mut self, character: &CharacterData) {
+        // Handle arrow keys for cursor navigation
+        if is_key_pressed(KeyCode::Left) {
+            if self.chat_state.cursor_position > 0 {
+                self.chat_state.cursor_position -= 1;
+            }
+        }
+        if is_key_pressed(KeyCode::Right) {
+            if self.chat_state.cursor_position < self.chat_state.input_buffer.len() {
+                self.chat_state.cursor_position += 1;
+            }
+        }
+        
+        // Handle Home/End keys
+        if is_key_pressed(KeyCode::Home) {
+            self.chat_state.cursor_position = 0;
+        }
+        if is_key_pressed(KeyCode::End) {
+            self.chat_state.cursor_position = self.chat_state.input_buffer.len();
+        }
+        
+        // Handle backspace key
+        if is_key_pressed(KeyCode::Backspace) {
+            if self.chat_state.cursor_position > 0 {
+                self.chat_state.input_buffer.remove(self.chat_state.cursor_position - 1);
+                self.chat_state.cursor_position -= 1;
+            }
+        }
+        
+        // Handle Delete key
+        if is_key_pressed(KeyCode::Delete) {
+            if self.chat_state.cursor_position < self.chat_state.input_buffer.len() {
+                self.chat_state.input_buffer.remove(self.chat_state.cursor_position);
+            }
+        }
+        
+        // Handle character input
+        // Process all characters that were pressed this frame
+        let mut chars_processed = 0;
         while let Some(character_typed) = get_char_pressed() {
+            chars_processed += 1;
+            // Limit to prevent infinite loops
+            if chars_processed > 100 {
+                break;
+            }
+            
             if character_typed == '\r' || character_typed == '\n' {
                 self.send_message(character);
-            } else if character_typed == '\x08' {  // Backspace
-                self.chat_state.input_buffer.pop();
+            } else if character_typed == '\x08' {  // Backspace character
+                if self.chat_state.cursor_position > 0 {
+                    self.chat_state.input_buffer.remove(self.chat_state.cursor_position - 1);
+                    self.chat_state.cursor_position -= 1;
+                }
             } else if !character_typed.is_control() {
-                self.chat_state.input_buffer.push(character_typed);
+                // Insert character at cursor position
+                self.chat_state.input_buffer.insert(self.chat_state.cursor_position, character_typed);
+                self.chat_state.cursor_position += 1;
             }
         }
     }
@@ -965,6 +1017,8 @@ impl StatusBarUI {
             
             // Unfocus chat after sending
             self.chat_focused = false;
+            // Reset cursor position
+            self.chat_state.cursor_position = 0;
         }
     }
 
@@ -1089,25 +1143,31 @@ impl StatusBarUI {
                 draw_texture(&chat_space2.texture, chat_x, chat_y, WHITE);
             }
 
+            // Draw chat target icon BEFORE chatEnter to avoid overlap
+            if let Some(target_tex) = self.chat_targets.get(&self.current_chat_target) {
+                draw_texture(&target_tex.texture, base_x - target_tex.origin.x, base_y - target_tex.origin.y, WHITE);
+            }
+
+            // Draw chat input FIRST (before chatEnter to avoid overlap)
+            // Position based on chat_space origin for proper alignment
+            let input_x = if let Some(chat_space) = &self.chat_space {
+                base_x - chat_space.origin.x + 5.0  // Align with chat space left edge
+            } else {
+                base_x - 512.0 + 5.0  // Fallback
+            };
+            let input_y = base_y - 46.0;   // Vertically centered in chat area
+            self.draw_chat_input(input_x, input_y, self.chat_focused);
+
             // Draw chatEnter overlay when chat is focused (shows input area more clearly)
-            let chat_enter_pos = if self.chat_focused {
+            // Draw AFTER chat input so it doesn't cover the text
+            if self.chat_focused {
                 if let Some(chat_enter) = &self.chat_enter {
+                    // Position chatEnter to the RIGHT of the chat input area, not overlapping
                     let enter_x = base_x - chat_enter.origin.x;
                     let enter_y = base_y - chat_enter.origin.y;
                     draw_texture(&chat_enter.texture, enter_x, enter_y, WHITE);
-                    Some((enter_x, enter_y))
-                } else {
-                    None
                 }
-            } else {
-                None
-            };
-
-            // Draw chat input - position based on chatEnter origin (467, 58)
-            // chatEnter starts at base_x - 467, so text should start slightly after that
-            let input_x = base_x - 460.0;  // Slightly right of chatEnter left edge
-            let input_y = base_y - 46.0;   // Vertically centered in chatEnter
-            self.draw_chat_input(input_x, input_y, chat_enter_pos.is_some());
+            }
 
             if let Some(chat_cover) = &self.chat_cover {
                 draw_texture(&chat_cover.texture, base_x - chat_cover.origin.x, base_y - chat_cover.origin.y, WHITE);
@@ -1119,12 +1179,7 @@ impl StatusBarUI {
             }
         }
 
-        // Draw chat target icon (if loaded and chat is open)
-        if self.is_chat_open {
-            if let Some(target_tex) = self.chat_targets.get(&self.current_chat_target) {
-                draw_texture(&target_tex.texture, base_x - target_tex.origin.x, base_y - target_tex.origin.y, WHITE);
-            }
-        }
+        // Chat target icon is now drawn before chatEnter to avoid overlap
 
         // Draw buttons using their origin values from WZ data
         self.bt_claim.draw();
@@ -1203,11 +1258,12 @@ impl StatusBarUI {
         // gaugeBackgrd is at base_x - 286, base_y - 33
         // HP gauge: x=29, width=137
         // MP gauge: x=198, width=137  
-        // EXP gauge: x=28, y=18, width=255 (shortened to fit within gaugeCover bounds)
+        // EXP gauge: x=28, y=18, width=255
+        // The gauge texture width represents 100%, so we clip it based on percentage
         let (offset_x, offset_y, max_width) = match gauge_type {
             "hp" => (29.0, 2.0, 137.0),
             "mp" => (198.0, 2.0, 137.0),
-            "exp" => (28.0, 18.0, 255.0),  // Shortened EXP bar to fit within bounds
+            "exp" => (28.0, 18.0, 255.0),
             _ => return,
         };
 
@@ -1215,18 +1271,26 @@ impl StatusBarUI {
         let gauge_bg_x = base_x - 286.0;
         let gauge_bg_y = base_y - 33.0;
 
+        // Calculate the visible width based on percentage
+        // percentage 0.5 = 50% = half the gauge should be visible
         let gauge_width = max_width * percentage;
         let draw_x = gauge_bg_x + offset_x;
         let draw_y = gauge_bg_y + offset_y;
 
-        // Stretch the gauge texture to fill the gauge width
+        // Use source_rect to clip the texture instead of stretching
+        // This shows the correct portion of the gauge texture
+        let tex_width = frame.texture.width();
+        let tex_height = frame.texture.height();
+        let source_width = tex_width * percentage;
+
         draw_texture_ex(
             &frame.texture,
             draw_x,
             draw_y,
             WHITE,
             DrawTextureParams {
-                dest_size: Some(Vec2::new(gauge_width, frame.texture.height())),
+                source: Some(Rect::new(0.0, 0.0, source_width, tex_height)),
+                dest_size: Some(Vec2::new(gauge_width, tex_height)),
                 ..Default::default()
             },
         );
@@ -1323,12 +1387,18 @@ impl StatusBarUI {
 
         // Draw input text - use dark gray color for visibility on white background
         let text_color = Color::from_rgba(40, 40, 40, 255);  // Dark gray for readability
-        draw_text(&self.chat_state.input_buffer, text_x + prefix_width, text_y, font_size, text_color);
+        
+        // Draw text before cursor
+        let text_before_cursor = &self.chat_state.input_buffer[..self.chat_state.cursor_position.min(self.chat_state.input_buffer.len())];
+        let text_after_cursor = &self.chat_state.input_buffer[self.chat_state.cursor_position.min(self.chat_state.input_buffer.len())..];
+        
+        let before_width = measure_text(text_before_cursor, None, font_size as u16, 1.0).width;
+        draw_text(text_before_cursor, text_x + prefix_width, text_y, font_size, text_color);
+        draw_text(text_after_cursor, text_x + prefix_width + before_width, text_y, font_size, text_color);
 
-        // Draw blinking caret (only when focused)
+        // Draw blinking caret at cursor position (only when focused)
         if self.chat_focused && self.caret_visible {
-            let text_width = measure_text(&self.chat_state.input_buffer, None, font_size as u16, 1.0).width;
-            draw_text("|", text_x + prefix_width + text_width, text_y, font_size, text_color);
+            draw_text("|", text_x + prefix_width + before_width, text_y, font_size, text_color);
         }
     }
 
@@ -1345,8 +1415,8 @@ impl StatusBarUI {
 
         for i in start_idx..end_idx {
             if let Some(msg) = self.chat_state.messages.get(i) {
-                let formatted = format!("[{}] {}: {}", msg.target, msg.sender, msg.text);
-                draw_text(&formatted, text_x, text_y, font_size, WHITE);
+                // Only display the message text, without chat type or sender name
+                draw_text(&msg.text, text_x, text_y, font_size, WHITE);
                 text_y += line_height;
             }
         }

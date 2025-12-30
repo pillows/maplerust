@@ -17,6 +17,8 @@ mod cash_shop;
 mod key_config;
 mod chat_balloon;
 mod game_menu;
+mod character_renderer;
+mod npc_dialog;
 
 #[macroquad::main("RustMaple")]
 async fn main() {

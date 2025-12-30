@@ -127,10 +127,12 @@ impl ChatBalloonSystem {
             }
         }
 
-        // Load NPC balloon frame (style 100 = npc)
+        // Load NPC balloon frame from ChatBalloon/npc (style 100 = npc)
         if let Ok(frame) = Self::load_balloon_frame(&root_node, "npc").await {
             frames.insert(100, frame);  // Use 100 for NPC balloon type
-            info!("Loaded NPC chat balloon frame");
+            info!("Loaded NPC chat balloon frame from ChatBalloon/npc");
+        } else {
+            warn!("Failed to load NPC chat balloon frame from ChatBalloon/npc");
         }
 
         Ok(frames)

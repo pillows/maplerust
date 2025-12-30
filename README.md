@@ -41,6 +41,48 @@ git submodule update --init --recursive
 3. **Open in browser:**
    Navigate to `http://localhost:8000`
 
+## Standalone WZ Viewer Application
+
+The project includes a standalone desktop application (`wz-viewer`) for viewing WZ and IMG files with a GUI.
+
+### Building for Windows
+
+**On Linux (cross-compilation):**
+```bash
+./build-windows.sh
+```
+This requires MinGW-w64 to be installed:
+- Ubuntu/Debian: `sudo apt-get install mingw-w64`
+- Fedora: `sudo dnf install mingw64-gcc`
+- Arch: `sudo pacman -S mingw-w64-gcc`
+
+**On Windows (native):**
+```cmd
+build-windows-native.bat
+```
+
+The Windows executable will be in `dist/windows/wz-viewer.exe`.
+
+### Building for macOS
+
+**On macOS:**
+```bash
+./build-mac.sh
+```
+
+This will create:
+- `dist/macos/wz-viewer` - Standalone executable
+- `dist/macos/WZ Viewer.app` - macOS app bundle (double-clickable)
+
+The script automatically detects whether you're on Intel or Apple Silicon and builds accordingly.
+
+### Building for All Platforms
+
+Run the appropriate script for your platform:
+```bash
+./build-all-platforms.sh  # Detects platform and builds accordingly
+```
+
 ## WZ Structure Dumper
 
 Inspect the contents of any WZ `.img` file:

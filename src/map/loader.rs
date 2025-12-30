@@ -1,3 +1,4 @@
+#[allow(non_snake_case)]
 use macroquad::prelude::*;
 use crate::assets::AssetManager;
 use crate::map::data::*;
@@ -69,10 +70,10 @@ impl MapLoader {
 
         // Build URL for the map file
         let url = format!(
-            "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Map/Map/{}/{}.img",
+            "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/00/Map/Map/{}/{}.img",
             map_category, map_id
         );
-        let cache_name = format!("/01/Map/Map/{}/{}.img", map_category, map_id);
+        let cache_name = format!("/00/Map/Map/{}/{}.img", map_category, map_id);
 
         info!("  Loading from: Map/Map/{}/{}.img", map_category, map_id);
         info!("  Full URL: {}", url);

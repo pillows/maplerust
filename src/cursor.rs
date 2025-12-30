@@ -27,6 +27,10 @@ pub struct CursorManager {
     frame_timer: f32,
     frame_duration: f32, // Time per frame in seconds
 
+    // Cached mouse position (updated at start of frame to avoid RefCell conflicts in WASM)
+    cached_mouse_x: f32,
+    cached_mouse_y: f32,
+
     loaded: bool,
 }
 
@@ -41,6 +45,8 @@ impl CursorManager {
             current_frame: 0,
             frame_timer: 0.0,
             frame_duration: 0.3, // 300ms per frame (~3 FPS)
+            cached_mouse_x: 0.0,
+            cached_mouse_y: 0.0,
             loaded: false,
         }
     }
@@ -195,6 +201,11 @@ impl CursorManager {
 
     /// Update cursor animation
     pub fn update(&mut self, dt: f32) {
+        // Cache mouse position at start of frame to avoid RefCell conflicts in WASM
+        let (mx, my) = mouse_position();
+        self.cached_mouse_x = mx;
+        self.cached_mouse_y = my;
+
         if !self.loaded {
             return;
         }
@@ -236,8 +247,9 @@ impl CursorManager {
             return;
         }
 
-        // Get mouse position
-        let (mouse_x, mouse_y) = mouse_position();
+        // Use cached mouse position to avoid RefCell conflicts in WASM
+        let mouse_x = self.cached_mouse_x;
+        let mouse_y = self.cached_mouse_y;
 
         // Get current animation frames
         let frames = match self.current_state {

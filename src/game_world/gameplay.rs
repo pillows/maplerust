@@ -13,6 +13,8 @@ use crate::cash_shop::CashShop;
 use crate::key_config::KeyConfig;
 use crate::chat_balloon::ChatBalloonSystem;
 use crate::game_menu::{GameMenu, MenuAction};
+use crate::character_renderer::{CharacterRenderer, CharacterState};
+use crate::npc_dialog::NpcDialogSystem;
 use futures;
 
 /// Gameplay state for when the player is in the game world
@@ -70,6 +72,8 @@ pub struct GameplayState {
     key_config: KeyConfig,
     chat_balloon: ChatBalloonSystem,
     game_menu: GameMenu,
+    character_renderer: CharacterRenderer,
+    npc_dialog: NpcDialogSystem,
 }
 
 impl GameplayState {
@@ -88,7 +92,7 @@ impl GameplayState {
             map_data: None,
             map_renderer: MapRenderer::new(),
             portal_cache: PortalCache::new(),
-            current_map_id: "100010000".to_string(), // Default starting map
+            current_map_id: "100000000".to_string(), // Default starting map
             target_portal_name: None, // No target portal on initial spawn
             bot_ai: BotAI::new(),
             mob_states: Vec::new(),
@@ -119,6 +123,8 @@ impl GameplayState {
             key_config: KeyConfig::new(),
             chat_balloon: ChatBalloonSystem::new(),
             game_menu: GameMenu::new(),
+            character_renderer: CharacterRenderer::new(),
+            npc_dialog: NpcDialogSystem::new(),
         }
     }
 
@@ -138,12 +144,14 @@ impl GameplayState {
         let inventory_load = self.inventory_window.load_assets();
         let equip_load = self.equip_window.load_assets();
         let user_info_load = self.user_info_window.load_assets();
+        let character_renderer_load = self.character_renderer.load_assets();
+        let npc_dialog_load = self.npc_dialog.load_assets();
 
         // info!("Waiting for UI assets to load in parallel...");
         // Wait for all UI assets to load
         let _ = futures::join!(font_load, cursor_load, status_bar_load, minimap_load, 
                                cash_shop_load, key_config_load, chat_balloon_load, game_menu_load,
-                               inventory_load, equip_load, user_info_load);
+                               inventory_load, equip_load, user_info_load, character_renderer_load, npc_dialog_load);
 
         // info!("UI assets loaded. Font: ok, Cursors: {}, StatusBar: {}",
         //       self.cursor_manager.is_loaded(),
@@ -238,6 +246,15 @@ impl GameplayState {
                 let bgm_name = map.info.bgm.clone();
 
                 self.current_map_id = map_id.to_string();
+                
+                // Find the lowest foothold Y to ensure platform is visible (before moving map)
+                let lowest_foothold_y = map.footholds.iter()
+                    .map(|fh| fh.y1.max(fh.y2) as f32)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                
+                // Get VR bounds before moving map
+                let vr_top = map.info.vr_top as f32;
+                
                 self.map_data = Some(map);
                 self.loading_new_map = false;
 
@@ -253,9 +270,19 @@ impl GameplayState {
                     .max(self.foothold_min_x)
                     .min(self.foothold_max_x - screen_width());
 
-                // Clamp Y only to bottom boundary (no top constraint)
+                // Calculate maximum camera Y to ensure lowest platform is visible
+                // Add some margin (100px) to show platform clearly
+                let max_camera_y_from_foothold = if lowest_foothold_y.is_finite() {
+                    lowest_foothold_y - screen_height() + 100.0
+                } else {
+                    vr_bottom - screen_height()
+                };
+                
+                // Clamp Y to ensure platform is visible, but don't go above VRTop
                 self.camera_y = target_camera_y
-                    .min(vr_bottom - screen_height());
+                    .max(vr_top)  // Don't go above map top
+                    .min(vr_bottom - screen_height())  // Don't go below map bottom
+                    .min(max_camera_y_from_foothold);  // Ensure lowest platform is visible
 
                 // Clear target portal name after successful spawn
                 self.target_portal_name = None;
@@ -489,17 +516,89 @@ impl GameplayState {
         let base_speed = if free_roam { 350.0 } else { 200.0 };
         let move_speed = DebugFlags::get_player_speed(base_speed);
 
-        // Only allow player movement when chat is not focused
-        let can_move = !self.status_bar.is_chat_focused();
+        // Only allow player movement when chat is not focused, menu is not open, and NPC dialog is not open
+        let can_move = !self.status_bar.is_chat_focused() && !self.game_menu.is_visible() && !self.npc_dialog.is_visible();
 
         if can_move {
-            // Horizontal movement - no artificial boundaries
-            // Player movement is limited by footholds, not viewport bounds
-            if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
-                self.player_x -= move_speed * clamped_dt;
+            // Horizontal movement - enforce VRLeft/VRRight boundaries and invisible walls
+            let vr_left = map.info.vr_left as f32;
+            let vr_right = map.info.vr_right as f32;
+            
+            // Check for invisible walls (platforms at different elevations blocking movement)
+            let mut can_move_left = true;
+            let mut can_move_right = true;
+            
+            if flags::ENABLE_COLLISION {
+                // Find current foothold player is on
+                let current_fh = map.find_foothold_at(self.player_x, self.player_y + 30.0);
+                let current_fh_y = current_fh.map(|fh| {
+                    let dx = fh.x2 - fh.x1;
+                    let dy = fh.y2 - fh.y1;
+                    let ix = self.player_x as i32;
+                    if dx != 0 {
+                        (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                    } else {
+                        fh.y1 as f32
+                    }
+                });
+                
+                // Check if moving left would hit a wall (platform at different elevation)
+                if let Some(current_y) = current_fh_y {
+                    let test_x = self.player_x - move_speed * clamped_dt;
+                    // Check all footholds at the test X position
+                    for fh in &map.footholds {
+                        let min_x = fh.x1.min(fh.x2) as f32;
+                        let max_x = fh.x1.max(fh.x2) as f32;
+                        if test_x >= min_x && test_x <= max_x {
+                            let dx = fh.x2 - fh.x1;
+                            let dy = fh.y2 - fh.y1;
+                            let ix = test_x as i32;
+                            let fh_y = if dx != 0 {
+                                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                            } else {
+                                fh.y1 as f32
+                            };
+                            // If this foothold is significantly higher (more than 50px), it's a wall
+                            if fh_y < current_y - 50.0 {
+                                can_move_left = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Check if moving right would hit a wall
+                    let test_x = self.player_x + move_speed * clamped_dt;
+                    for fh in &map.footholds {
+                        let min_x = fh.x1.min(fh.x2) as f32;
+                        let max_x = fh.x1.max(fh.x2) as f32;
+                        if test_x >= min_x && test_x <= max_x {
+                            let dx = fh.x2 - fh.x1;
+                            let dy = fh.y2 - fh.y1;
+                            let ix = test_x as i32;
+                            let fh_y = if dx != 0 {
+                                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                            } else {
+                                fh.y1 as f32
+                            };
+                            // If this foothold is significantly higher (more than 50px), it's a wall
+                            if fh_y < current_y - 50.0 {
+                                can_move_right = false;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
-                self.player_x += move_speed * clamped_dt;
+            
+            if (is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)) && can_move_left {
+                let new_x = self.player_x - move_speed * clamped_dt;
+                // Enforce left boundary - player cannot go past VRLeft
+                self.player_x = new_x.max(vr_left);
+            }
+            if (is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)) && can_move_right {
+                let new_x = self.player_x + move_speed * clamped_dt;
+                // Enforce right boundary - player cannot go past VRRight
+                self.player_x = new_x.min(vr_right);
             }
 
             // Free-roam vertical movement (Space + Up/Down or W/S)
@@ -583,10 +682,10 @@ impl GameplayState {
                                 // Double-click detected! Show NPC dialog
                                 info!("NPC interaction created: {} (ID: {})", life.name, life.id);
                                 
-                                // Show NPC dialog balloon with sample text
-                                let npc_dialog = format!("Hello! I'm {}. Lorem ipsum dolor sit amet, consectetur adipiscing elit. How can I help you today?", 
+                                // Show NPC dialog UI with sample text
+                                let npc_dialog_text = format!("Hello! I'm {}. Lorem ipsum dolor sit amet, consectetur adipiscing elit. How can I help you today?", 
                                     if !life.name.is_empty() { &life.name } else { "an NPC" });
-                                self.chat_balloon.show_npc_dialog(&npc_dialog, npc_x, npc_y - life.origin_y as f32);
+                                self.npc_dialog.show_dialog(&npc_dialog_text, npc_x, npc_y - life.origin_y as f32);
                                 
                                 // Reset click tracking to prevent triple-clicks from triggering again
                                 self.last_npc_click_time = -1.0;
@@ -730,7 +829,7 @@ impl GameplayState {
                         self.player_y = self.player_y.max(min_y).min(max_y);
                     }
 
-                    // Jump (Option) to dismount
+                    // Jump (Alt) to dismount - use is_key_pressed to only trigger once
                     if is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt) {
                         self.on_ladder = false;
                         self.current_ladder_id = None;
@@ -756,10 +855,11 @@ impl GameplayState {
 
             if can_move {
                 // Drop through platform with Alt/Option + Down
+                // Use is_key_down for Alt to allow holding it
                 let down_pressed = is_key_down(KeyCode::Down) || is_key_down(KeyCode::S);
-                let jump_pressed = is_key_pressed(KeyCode::LeftAlt) || is_key_pressed(KeyCode::RightAlt);
+                let alt_pressed = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
 
-                if jump_pressed && down_pressed && self.on_ground {
+                if alt_pressed && down_pressed && self.on_ground {
                     // Check if there's a platform below before allowing drop-through
                     // Find current foothold
                     if let Some(current_fh) = map.find_foothold_at(self.player_x, self.player_y + 30.0) {
@@ -783,8 +883,8 @@ impl GameplayState {
                             info!("Player dropping through platform from y={} to y={}", current_fh_y, below_y);
                         }
                     }
-                } else if jump_pressed && self.on_ground {
-                    // Normal jump
+                } else if alt_pressed && self.on_ground && !down_pressed {
+                    // Normal jump (Alt without Down)
                     self.player_vy = -400.0; // Jump velocity
                     self.on_ground = false;
                 }
@@ -973,6 +1073,26 @@ impl GameplayState {
         self.key_config.update();
         self.chat_balloon.update(clamped_dt);
         self.game_menu.update();
+        self.npc_dialog.update();
+
+        // Update character renderer
+        let character_state = if self.on_ladder {
+            CharacterState::Stand  // Standing on ladder
+        } else if !self.on_ground && self.player_vy < 0.0 {
+            CharacterState::Jump
+        } else if !self.on_ground && self.player_vy > 0.0 {
+            CharacterState::Fall
+        } else {
+            if can_move && (is_key_down(KeyCode::Left) || is_key_down(KeyCode::Right) || 
+                            is_key_down(KeyCode::A) || is_key_down(KeyCode::D)) {
+                CharacterState::Move
+            } else {
+                CharacterState::Stand
+            }
+        };
+        
+        let facing_right = !(is_key_down(KeyCode::Left) || is_key_down(KeyCode::A));
+        self.character_renderer.update(clamped_dt, character_state, facing_right);
 
         // Handle game menu actions
         match self.game_menu.take_action() {
@@ -1036,10 +1156,28 @@ impl GameplayState {
             // Render map backgrounds (behind player)
             self.map_renderer.render(map, self.camera_x, self.camera_y, Some(&self.bot_ai));
 
-            // Draw player (simple square for now)
+            // Draw player using character renderer
             let player_screen_x = self.player_x - self.camera_x;
             let player_screen_y = self.player_y - self.camera_y;
-            draw_rectangle(player_screen_x - 15.0, player_screen_y - 30.0, 30.0, 60.0, BLUE);
+            
+            // Determine character state for rendering (same logic as update)
+            let character_state = if self.on_ladder {
+                CharacterState::Stand
+            } else if !self.on_ground && self.player_vy < 0.0 {
+                CharacterState::Jump
+            } else if !self.on_ground && self.player_vy > 0.0 {
+                CharacterState::Fall
+            } else {
+                let can_move = !self.status_bar.is_chat_focused() && !self.game_menu.is_visible();
+                if can_move && (is_key_down(KeyCode::Left) || is_key_down(KeyCode::Right) || 
+                                is_key_down(KeyCode::A) || is_key_down(KeyCode::D)) {
+                    CharacterState::Move
+                } else {
+                    CharacterState::Stand
+                }
+            };
+            
+            self.character_renderer.draw(player_screen_x, player_screen_y, character_state);
 
             // Draw player hitbox if enabled
             if flags::SHOW_HITBOXES {
@@ -1087,6 +1225,9 @@ impl GameplayState {
             
             // Draw chat balloons (above NPCs/mobs)
             self.chat_balloon.draw(self.camera_x, self.camera_y);
+            
+            // Draw NPC dialog window (on top of everything)
+            self.npc_dialog.draw(self.camera_x, self.camera_y);
         } else {
             let text = "No map loaded";
             draw_text(text, 20.0, 40.0, 20.0, RED);
@@ -1100,7 +1241,7 @@ impl GameplayState {
 
         // Draw minimap
         if let Some(map) = &self.map_data {
-            self.minimap.draw(self.player_x, self.player_y, map);
+            self.minimap.draw(self.player_x, self.player_y, map, self.camera_x, self.camera_y);
         }
 
         // Draw UI windows

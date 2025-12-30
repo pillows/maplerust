@@ -4,8 +4,9 @@ use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzNodeCast};
 
-const UIWINDOW_URL: &str = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/UI/UIWindow.img";
-const UIWINDOW_CACHE: &str = "/01/UI/UIWindow.img";
+// Use StatusBar2.img for menu assets (Menu section)
+const STATUSBAR_URL: &str = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/UI/StatusBar2.img";
+const STATUSBAR_CACHE: &str = "/01/UI/StatusBar2.img";
 
 /// Texture with origin point
 struct TextureWithOrigin {
@@ -213,47 +214,74 @@ impl GameMenu {
     }
 
     async fn load_from_wz() -> Result<GameMenuData, String> {
-        let bytes = AssetManager::fetch_and_cache(UIWINDOW_URL, UIWINDOW_CACHE).await
-            .map_err(|e| format!("Failed to fetch UIWindow.img: {}", e))?;
+        let bytes = AssetManager::fetch_and_cache(STATUSBAR_URL, STATUSBAR_CACHE).await
+            .map_err(|e| format!("Failed to fetch StatusBar2.img: {}", e))?;
 
         let wz_iv = guess_iv_from_wz_img(&bytes)
-            .ok_or_else(|| "Unable to guess version from UIWindow.img".to_string())?;
+            .ok_or_else(|| "Unable to guess version from StatusBar2.img".to_string())?;
 
         let byte_len = bytes.len();
         let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
-        let cache_name_ref: wz_reader::WzNodeName = UIWINDOW_CACHE.to_string().into();
+        let cache_name_ref: wz_reader::WzNodeName = STATUSBAR_CACHE.to_string().into();
         let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
-        let root_node: WzNodeArc = WzNode::new(&UIWINDOW_CACHE.into(), wz_image, None).into();
+        let root_node: WzNodeArc = WzNode::new(&STATUSBAR_CACHE.into(), wz_image, None).into();
 
         root_node.write().unwrap().parse(&root_node)
-            .map_err(|e| format!("Failed to parse UIWindow.img: {:?}", e))?;
+            .map_err(|e| format!("Failed to parse StatusBar2.img: {:?}", e))?;
 
         let mut data = GameMenuData::default();
 
-        // Try to load from GameMenu path
-        data.background = Self::load_texture(&root_node, "GameMenu/backgrnd").await.ok();
+        // Load menu background from mainBar/Menu/backgrnd (has frames 0, 1, 2)
+        data.background = Self::load_texture(&root_node, "mainBar/Menu/backgrnd/0").await.ok();
 
-        // Load menu buttons - these are typically in StatusBar2 Menu section
-        // But we'll create placeholder buttons for now
-        let button_names = [
-            ("Character", &mut data.btn_character, 0.0),
-            ("Stat", &mut data.btn_stat, 25.0),
-            ("Quest", &mut data.btn_quest, 50.0),
-            ("Inventory", &mut data.btn_inventory, 75.0),
-            ("Equip", &mut data.btn_equip, 100.0),
-            ("Skill", &mut data.btn_skill, 125.0),
-            ("KeyConfig", &mut data.btn_key_config, 150.0),
-            ("SystemOption", &mut data.btn_system_option, 175.0),
-            ("GameOption", &mut data.btn_game_option, 200.0),
-            ("Quit", &mut data.btn_quit, 225.0),
+        // Load menu buttons from mainBar/Menu section
+        // Based on StatusBar2_structure.txt: BtMSN, BtEquip, BtSkill, BtRank, BtStat, BtCommunity, BtItem, BtQuest
+        let button_configs = [
+            ("BtStat", &mut data.btn_stat, 0.0),
+            ("BtEquip", &mut data.btn_equip, 22.0),
+            ("BtItem", &mut data.btn_inventory, 44.0),
+            ("BtSkill", &mut data.btn_skill, 66.0),
+            ("BtQuest", &mut data.btn_quest, 88.0),
+            ("BtCommunity", &mut data.btn_character, 110.0),
         ];
 
-        for (name, btn, y_offset) in button_names {
+        for (btn_name, btn, y_offset) in button_configs {
+            let base_path = format!("mainBar/Menu/{}", btn_name);
+            if let Ok(normal) = Self::load_texture(&root_node, &format!("{}/normal/0", base_path)).await {
+                btn.width = normal.texture.width();
+                btn.height = normal.texture.height();
+                btn.origin = normal.origin;
+                btn.normal = Some(normal.texture);
+            }
+            if let Ok(hover) = Self::load_texture(&root_node, &format!("{}/mouseOver/0", base_path)).await {
+                btn.mouse_over = Some(hover.texture);
+            }
+            if let Ok(pressed) = Self::load_texture(&root_node, &format!("{}/pressed/0", base_path)).await {
+                btn.pressed = Some(pressed.texture);
+            }
+            if let Ok(disabled) = Self::load_texture(&root_node, &format!("{}/disabled/0", base_path)).await {
+                btn.disabled = Some(disabled.texture);
+            }
             btn.y = y_offset;
-            btn.width = 120.0;
-            btn.height = 22.0;
-            btn.x = 15.0;
+            btn.x = 0.0;
         }
+
+        // Set up remaining buttons with placeholder positions
+        data.btn_key_config.y = 132.0;
+        data.btn_key_config.width = 80.0;
+        data.btn_key_config.height = 22.0;
+        
+        data.btn_system_option.y = 154.0;
+        data.btn_system_option.width = 80.0;
+        data.btn_system_option.height = 22.0;
+        
+        data.btn_game_option.y = 176.0;
+        data.btn_game_option.width = 80.0;
+        data.btn_game_option.height = 22.0;
+        
+        data.btn_quit.y = 198.0;
+        data.btn_quit.width = 80.0;
+        data.btn_quit.height = 22.0;
 
         Ok(data)
     }
@@ -408,45 +436,48 @@ impl GameMenu {
             return;
         }
 
-        // Draw background
+        // Draw background from loaded asset
         if let Some(bg) = &self.background {
             draw_texture(&bg.texture, self.x - bg.origin.x, self.y - bg.origin.y, WHITE);
         } else {
-            // Fallback background
+            // Fallback background only if no asset loaded
             draw_rectangle(self.x, self.y, self.width, self.height, Color::from_rgba(30, 30, 40, 240));
             draw_rectangle_lines(self.x, self.y, self.width, self.height, 1.0, Color::from_rgba(100, 100, 120, 255));
         }
 
-        // Draw menu items
-        let items = [
-            ("Character (C)", &self.btn_character),
-            ("Stat (S)", &self.btn_stat),
-            ("Quest (Q)", &self.btn_quest),
-            ("Inventory (I)", &self.btn_inventory),
-            ("Equip (E)", &self.btn_equip),
-            ("Skill (K)", &self.btn_skill),
+        // Draw buttons using loaded textures
+        self.btn_stat.draw(self.x, self.y);
+        self.btn_equip.draw(self.x, self.y);
+        self.btn_inventory.draw(self.x, self.y);
+        self.btn_skill.draw(self.x, self.y);
+        self.btn_quest.draw(self.x, self.y);
+        self.btn_character.draw(self.x, self.y);
+
+        // Draw fallback labels for buttons without textures
+        let fallback_items = [
             ("Key Config", &self.btn_key_config),
             ("System Option", &self.btn_system_option),
             ("Game Option", &self.btn_game_option),
             ("Quit Game", &self.btn_quit),
         ];
 
-        for (label, btn) in items {
-            let draw_x = self.x + btn.x;
-            let draw_y = self.y + btn.y;
+        for (label, btn) in fallback_items {
+            if btn.normal.is_none() {
+                let draw_x = self.x + btn.x;
+                let draw_y = self.y + btn.y;
 
-            // Draw button background based on state
-            let bg_color = match btn.state {
-                ButtonState::MouseOver => Color::from_rgba(60, 60, 80, 200),
-                ButtonState::Pressed => Color::from_rgba(80, 80, 100, 200),
-                _ => Color::from_rgba(40, 40, 50, 200),
-            };
+                let bg_color = match btn.state {
+                    ButtonState::MouseOver => Color::from_rgba(60, 60, 80, 200),
+                    ButtonState::Pressed => Color::from_rgba(80, 80, 100, 200),
+                    _ => Color::from_rgba(40, 40, 50, 200),
+                };
 
-            draw_rectangle(draw_x, draw_y, btn.width, btn.height, bg_color);
-            draw_rectangle_lines(draw_x, draw_y, btn.width, btn.height, 1.0, Color::from_rgba(80, 80, 100, 255));
-
-            // Draw label
-            draw_text(label, draw_x + 5.0, draw_y + 16.0, 14.0, WHITE);
+                draw_rectangle(draw_x, draw_y, btn.width, btn.height, bg_color);
+                draw_rectangle_lines(draw_x, draw_y, btn.width, btn.height, 1.0, Color::from_rgba(80, 80, 100, 255));
+                draw_text(label, draw_x + 5.0, draw_y + 16.0, 14.0, WHITE);
+            } else {
+                btn.draw(self.x, self.y);
+            }
         }
     }
 }

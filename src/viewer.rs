@@ -1,4 +1,5 @@
 use eframe::egui;
+use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -464,8 +465,8 @@ impl WzViewerApp {
                         }
                     };
                     
-                    // Create reader
-                    let reader = Arc::new(WzReader::new(bytes.clone()).with_iv(wz_iv));
+                    // Create reader from bytes
+                    let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
                     
                     // Create WZ image
                     let wz_image = WzImage::new(&name.into(), 0, bytes.len(), &reader);
@@ -619,8 +620,8 @@ impl WzViewerApp {
     }
     
     fn export_structure(&self, root: &WzNodeArc, output_path: &PathBuf) {
-        let mut log_output = String::new();
-        log_output.push_str(&format!(
+        let log_output = RefCell::new(String::new());
+        log_output.borrow_mut().push_str(&format!(
             "=== WZ Structure ===\n\n"
         ));
         
@@ -655,10 +656,11 @@ impl WzViewerApp {
                     wz_reader::property::WzValue::Lua(_) => "Lua",
                 },
             };
-            log_output.push_str(&format!("{} [{}]\n", path, type_name));
+            log_output.borrow_mut().push_str(&format!("{} [{}]\n", path, type_name));
         });
         
-        if let Err(e) = fs::write(output_path, log_output) {
+        let output_string = log_output.into_inner();
+        if let Err(e) = fs::write(output_path, output_string) {
             eprintln!("Failed to write export file: {}", e);
         }
     }
@@ -714,8 +716,8 @@ impl WzViewerApp {
             };
 
             // Export IMG files from this WZ file
-            let mut img_count = 0;
-            let mut error_count = 0;
+            let img_count = RefCell::new(0);
+            let error_count = RefCell::new(0);
 
             walk_node(&wz_root, true, &mut |n: &WzNodeArc| {
                 let node_read = n.read().unwrap();
@@ -729,7 +731,7 @@ impl WzViewerApp {
                     let path_parts: Vec<&str> = full_path.split('/').collect();
 
                     if path_parts.is_empty() {
-                        error_count += 1;
+                        *error_count.borrow_mut() += 1;
                         eprintln!("Invalid path: {}", full_path);
                         return;
                     }
@@ -746,7 +748,7 @@ impl WzViewerApp {
 
                     // Create the directory structure
                     if let Err(e) = fs::create_dir_all(&current_dir) {
-                        error_count += 1;
+                        *error_count.borrow_mut() += 1;
                         eprintln!("Failed to create directory {}: {}", current_dir.display(), e);
                         return;
                     }
@@ -765,19 +767,21 @@ impl WzViewerApp {
                     // Write the IMG file
                     match fs::write(&output_path, bytes) {
                         Ok(_) => {
-                            img_count += 1;
+                            *img_count.borrow_mut() += 1;
                         }
                         Err(e) => {
-                            error_count += 1;
+                            *error_count.borrow_mut() += 1;
                             eprintln!("Failed to write IMG file to {}: {}", output_path.display(), e);
                         }
                     }
                 }
             });
 
-            println!("  → Exported {} IMG files from {} ({} errors)", img_count, name, error_count);
-            total_img_count += img_count;
-            total_error_count += error_count;
+            let img_count_val = *img_count.borrow();
+            let error_count_val = *error_count.borrow();
+            println!("  → Exported {} IMG files from {} ({} errors)", img_count_val, name, error_count_val);
+            total_img_count += img_count_val;
+            total_error_count += error_count_val;
         }
 
         println!("\n=== Bulk Export Complete ===");
@@ -806,8 +810,8 @@ impl WzViewerApp {
             return;
         }
 
-        let mut img_count = 0;
-        let mut error_count = 0;
+        let img_count = RefCell::new(0);
+        let error_count = RefCell::new(0);
 
         walk_node(root, true, &mut |n: &WzNodeArc| {
             let node_read = n.read().unwrap();
@@ -821,7 +825,7 @@ impl WzViewerApp {
                 let path_parts: Vec<&str> = full_path.split('/').collect();
 
                 if path_parts.is_empty() {
-                    error_count += 1;
+                    *error_count.borrow_mut() += 1;
                     eprintln!("Invalid path: {}", full_path);
                     return;
                 }
@@ -838,7 +842,7 @@ impl WzViewerApp {
 
                 // Create the directory structure
                 if let Err(e) = fs::create_dir_all(&current_dir) {
-                    error_count += 1;
+                    *error_count.borrow_mut() += 1;
                     eprintln!("Failed to create directory {}: {}", current_dir.display(), e);
                     return;
                 }
@@ -857,24 +861,27 @@ impl WzViewerApp {
                 // Write the IMG file
                 match fs::write(&output_path, bytes) {
                     Ok(_) => {
-                        img_count += 1;
-                        if img_count % 10 == 0 {
-                            println!("Exported {} IMG files so far...", img_count);
+                        let mut count = img_count.borrow_mut();
+                        *count += 1;
+                        if *count % 10 == 0 {
+                            println!("Exported {} IMG files so far...", *count);
                         }
                     }
                     Err(e) => {
-                        error_count += 1;
+                        *error_count.borrow_mut() += 1;
                         eprintln!("Failed to write IMG file to {}: {}", output_path.display(), e);
                     }
                 }
             }
         });
 
-        println!("Export complete: {} IMG files exported, {} errors", img_count, error_count);
-        if error_count > 0 {
-            self.error_message = Some(format!("Export complete: {} IMG files exported, {} errors occurred. Check console for details.", img_count, error_count));
+        let img_count_val = *img_count.borrow();
+        let error_count_val = *error_count.borrow();
+        println!("Export complete: {} IMG files exported, {} errors", img_count_val, error_count_val);
+        if error_count_val > 0 {
+            self.error_message = Some(format!("Export complete: {} IMG files exported, {} errors occurred. Check console for details.", img_count_val, error_count_val));
         } else {
-            self.error_message = Some(format!("Successfully exported {} IMG files to {}", img_count, output_dir.display()));
+            self.error_message = Some(format!("Successfully exported {} IMG files to {}", img_count_val, output_dir.display()));
         }
     }
 
@@ -886,8 +893,8 @@ impl WzViewerApp {
             return;
         }
 
-        let mut png_count = 0;
-        let mut error_count = 0;
+        let png_count = RefCell::new(0);
+        let error_count = RefCell::new(0);
 
         walk_node(root, true, &mut |n: &WzNodeArc| {
             let node_read = n.read().unwrap();
@@ -906,30 +913,33 @@ impl WzViewerApp {
                     Ok(dynamic_img) => {
                         match dynamic_img.save(&output_path) {
                             Ok(_) => {
-                                png_count += 1;
-                                if png_count % 100 == 0 {
-                                    println!("Exported {} PNGs so far...", png_count);
+                                let mut count = png_count.borrow_mut();
+                                *count += 1;
+                                if *count % 100 == 0 {
+                                    println!("Exported {} PNGs so far...", *count);
                                 }
                             }
                             Err(e) => {
-                                error_count += 1;
+                                *error_count.borrow_mut() += 1;
                                 eprintln!("Failed to save PNG to {}: {}", output_path.display(), e);
                             }
                         }
                     }
                     Err(e) => {
-                        error_count += 1;
+                        *error_count.borrow_mut() += 1;
                         eprintln!("Failed to extract PNG from {}: {:?}", full_path, e);
                     }
                 }
             }
         });
 
-        println!("Export complete: {} PNGs exported, {} errors", png_count, error_count);
-        if error_count > 0 {
-            self.error_message = Some(format!("Export complete: {} PNGs exported, {} errors occurred. Check console for details.", png_count, error_count));
+        let png_count_val = *png_count.borrow();
+        let error_count_val = *error_count.borrow();
+        println!("Export complete: {} PNGs exported, {} errors", png_count_val, error_count_val);
+        if error_count_val > 0 {
+            self.error_message = Some(format!("Export complete: {} PNGs exported, {} errors occurred. Check console for details.", png_count_val, error_count_val));
         } else {
-            self.error_message = Some(format!("Successfully exported {} PNGs to {}", png_count, output_dir.display()));
+            self.error_message = Some(format!("Successfully exported {} PNGs to {}", png_count_val, output_dir.display()));
         }
     }
 }

@@ -96,9 +96,10 @@ impl KeyConfigButton {
 pub struct KeyConfig {
     visible: bool,
     loaded: bool,
-    // Background
+    // Background layers (z-order: backgrnd, backgrnd2, backgrnd3)
     background: Option<TextureWithOrigin>,
     background2: Option<TextureWithOrigin>,
+    background3: Option<TextureWithOrigin>,
     // Buttons
     cancel_button: KeyConfigButton,
     default_button: KeyConfigButton,
@@ -120,6 +121,7 @@ impl KeyConfig {
             loaded: false,
             background: None,
             background2: None,
+            background3: None,
             cancel_button: KeyConfigButton::new(),
             default_button: KeyConfigButton::new(),
             ok_button: KeyConfigButton::new(),
@@ -137,13 +139,14 @@ impl KeyConfig {
         info!("Loading KeyConfig assets...");
         
         match Self::load_from_wz().await {
-            Ok((bg, bg2, cancel, default_btn, ok_btn)) => {
+            Ok((bg, bg2, bg3, cancel, default_btn, ok_btn)) => {
                 if let Some(ref b) = bg {
                     self.width = b.texture.width();
                     self.height = b.texture.height();
                 }
                 self.background = bg;
                 self.background2 = bg2;
+                self.background3 = bg3;
                 self.cancel_button = cancel;
                 self.default_button = default_btn;
                 self.ok_button = ok_btn;
@@ -159,7 +162,7 @@ impl KeyConfig {
         }
     }
 
-    async fn load_from_wz() -> Result<(Option<TextureWithOrigin>, Option<TextureWithOrigin>, KeyConfigButton, KeyConfigButton, KeyConfigButton), String> {
+    async fn load_from_wz() -> Result<(Option<TextureWithOrigin>, Option<TextureWithOrigin>, Option<TextureWithOrigin>, KeyConfigButton, KeyConfigButton, KeyConfigButton), String> {
         let bytes = AssetManager::fetch_and_cache(UIWINDOW2_URL, UIWINDOW2_CACHE).await
             .map_err(|e| format!("Failed to fetch UIWindow2.img: {}", e))?;
 
@@ -175,16 +178,17 @@ impl KeyConfig {
         root_node.write().unwrap().parse(&root_node)
             .map_err(|e| format!("Failed to parse UIWindow2.img: {:?}", e))?;
 
-        // Load backgrounds
+        // Load background layers in z-order (backgrnd, backgrnd2, backgrnd3)
         let bg = Self::load_texture(&root_node, "KeyConfig/backgrnd").await.ok();
         let bg2 = Self::load_texture(&root_node, "KeyConfig/backgrnd2").await.ok();
+        let bg3 = Self::load_texture(&root_node, "KeyConfig/backgrnd3").await.ok();
 
         // Load buttons
         let cancel = Self::load_button(&root_node, "KeyConfig/BtCancel").await;
         let default_btn = Self::load_button(&root_node, "KeyConfig/BtDefault").await;
         let ok_btn = Self::load_button(&root_node, "KeyConfig/BtOK").await;
 
-        Ok((bg, bg2, cancel, default_btn, ok_btn))
+        Ok((bg, bg2, bg3, cancel, default_btn, ok_btn))
     }
 
     async fn load_texture(root_node: &WzNodeArc, path: &str) -> Result<TextureWithOrigin, String> {
@@ -331,7 +335,8 @@ impl KeyConfig {
             return;
         }
 
-        // Draw background
+        // Draw background layers in z-order (backgrnd z=-5, backgrnd2 z=-4, backgrnd3 z=-3)
+        // backgrnd (z=-5) should be drawn first (behind)
         if let Some(bg) = &self.background {
             draw_texture(&bg.texture, self.x - bg.origin.x, self.y - bg.origin.y, WHITE);
         } else {
@@ -340,68 +345,22 @@ impl KeyConfig {
             draw_rectangle_lines(self.x, self.y, self.width, self.height, 1.0, Color::from_rgba(100, 100, 120, 255));
         }
 
-        // Draw background2 (decorative layer)
+        // backgrnd2 (z=-4) should be drawn second (middle)
         if let Some(bg2) = &self.background2 {
             draw_texture(&bg2.texture, self.x - bg2.origin.x, self.y - bg2.origin.y, WHITE);
         }
 
-        // Draw title
-        draw_text("Key Configuration", self.x + 10.0, self.y + 18.0, 14.0, WHITE);
+        // backgrnd3 (z=-3) should be drawn last (in front)
+        if let Some(bg3) = &self.background3 {
+            draw_texture(&bg3.texture, self.x - bg3.origin.x, self.y - bg3.origin.y, WHITE);
+        }
 
-        // Draw keyboard layout placeholder
-        self.draw_keyboard_layout();
-
-        // Draw buttons
+        // Draw buttons (keyboard layout removed - only WZ assets should be visible)
         self.cancel_button.draw(self.x, self.y);
         self.default_button.draw(self.x, self.y);
         self.ok_button.draw(self.x, self.y);
     }
 
-    fn draw_keyboard_layout(&self) {
-        let start_x = self.x + 20.0;
-        let start_y = self.y + 40.0;
-        let key_size = 32.0;
-        let key_spacing = 4.0;
-
-        // Draw keyboard rows
-        let rows = [
-            vec!["Esc", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"],
-            vec!["`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "Back"],
-            vec!["Tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "[", "]", "\\"],
-            vec!["Caps", "A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'", "Enter"],
-            vec!["Shift", "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Shift"],
-            vec!["Ctrl", "Alt", "Space", "Alt", "Ctrl"],
-        ];
-
-        let mut y = start_y;
-        for row in rows.iter() {
-            let mut x = start_x;
-            for key in row.iter() {
-                let width = match *key {
-                    "Back" | "Tab" | "Caps" | "Enter" => key_size * 1.5,
-                    "Shift" => key_size * 2.0,
-                    "Space" => key_size * 5.0,
-                    "Ctrl" | "Alt" => key_size * 1.2,
-                    _ => key_size,
-                };
-
-                // Draw key background
-                draw_rectangle(x, y, width, key_size, Color::from_rgba(50, 50, 60, 200));
-                draw_rectangle_lines(x, y, width, key_size, 1.0, Color::from_rgba(80, 80, 100, 255));
-
-                // Draw key label
-                let font_size = if key.len() > 2 { 10.0 } else { 12.0 };
-                let text_width = measure_text(key, None, font_size as u16, 1.0).width;
-                draw_text(key, x + (width - text_width) / 2.0, y + key_size / 2.0 + 4.0, font_size, WHITE);
-
-                x += width + key_spacing;
-            }
-            y += key_size + key_spacing;
-        }
-
-        // Draw instructions
-        draw_text("Click a key to assign an action", start_x, y + 20.0, 12.0, LIGHTGRAY);
-    }
 }
 
 impl Default for KeyConfig {

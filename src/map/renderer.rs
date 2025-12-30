@@ -49,6 +49,11 @@ impl MapRenderer {
         // Draw NPCs and mobs
         self.render_life(map, camera_x, camera_y, bot_ai);
 
+        // Draw fake players
+        if let Some(bot_ai) = bot_ai {
+            self.render_fake_players(bot_ai, camera_x, camera_y);
+        }
+
         // Draw footholds (platforms) for debugging
         if self.debug_footholds {
             self.render_footholds(map, camera_x, camera_y);
@@ -176,24 +181,57 @@ impl MapRenderer {
         let screen_w = screen_width();
         let screen_h = screen_height();
 
-        // Collect all layers that have tiles or objects
-        let mut layers: Vec<i32> = Vec::new();
-        for tile in &map.tiles {
-            if !layers.contains(&tile.layer) {
-                layers.push(tile.layer);
-            }
+        // Collect all renderable items with their z values for proper sorting
+        #[derive(Debug)]
+        struct RenderItem {
+            z: i32,  // Combined z value (layer * 10000 + z_m for proper sorting)
+            y: i32,  // Y position for secondary sorting
+            is_tile: bool,
+            index: usize,
         }
-        for obj in &map.objects {
-            if !layers.contains(&obj.layer) {
-                layers.push(obj.layer);
-            }
-        }
-        layers.sort();
 
-        // Render each layer in order
-        for layer in layers {
-            // Render tiles for this layer
-            for tile in map.tiles.iter().filter(|t| t.layer == layer) {
+        let mut render_items: Vec<RenderItem> = Vec::new();
+        
+        // Add tiles with their z values
+        for (i, tile) in map.tiles.iter().enumerate() {
+            // Use layer as primary sort, z_m as secondary
+            // Multiply layer by large number to ensure layer separation
+            let z = tile.layer * 10000 + tile.z_m;
+            render_items.push(RenderItem {
+                z,
+                y: tile.y,
+                is_tile: true,
+                index: i,
+            });
+        }
+        
+        // Add objects with their z values
+        for (i, obj) in map.objects.iter().enumerate() {
+            // Use layer as primary sort, z_m as secondary, z as tertiary
+            let z = obj.layer * 10000 + obj.z_m * 100 + obj.z;
+            render_items.push(RenderItem {
+                z,
+                y: obj.y,
+                is_tile: false,
+                index: i,
+            });
+        }
+        
+        // Sort by z value, then by Y position (lower Y = rendered first/behind)
+        render_items.sort_by(|a, b| {
+            let z_cmp = a.z.cmp(&b.z);
+            if z_cmp != std::cmp::Ordering::Equal {
+                z_cmp
+            } else {
+                // If z values are equal, sort by Y position (lower Y = rendered first/behind)
+                a.y.cmp(&b.y)
+            }
+        });
+
+        // Render items in sorted order
+        for item in &render_items {
+            if item.is_tile {
+                let tile = &map.tiles[item.index];
                 let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
                 let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
 
@@ -224,10 +262,8 @@ impl MapRenderer {
                     let info = format!("T{}", tile.id);
                     draw_text(&info, screen_x + 5.0, screen_y + 30.0, 12.0, RED);
                 }
-            }
-
-            // Render objects for this layer
-            for obj in map.objects.iter().filter(|o| o.layer == layer) {
+            } else {
+                let obj = &map.objects[item.index];
                 let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
                 let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
 
@@ -370,24 +406,62 @@ impl MapRenderer {
                     if let Some(bot) = bot_ai.get_bot_state(&life.id) {
                         (bot.x, bot.y, !bot.facing_right)
                     } else {
-                        (life.x as f32, life.y as f32, life.flip)
+                        // Mob not in bot AI, use spawn position snapped to foothold
+                        let mob_x = life.x as f32;
+                        let mob_y = if life.foothold != 0 {
+                            if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
+                                map.get_foothold_y_at(fh, mob_x)
+                            } else {
+                                life.y as f32
+                            }
+                        } else {
+                            life.y as f32
+                        };
+                        (mob_x, mob_y, life.flip)
                     }
                 } else {
-                    (life.x as f32, life.y as f32, life.flip)
+                    // No bot AI, use spawn position snapped to foothold
+                    let mob_x = life.x as f32;
+                    let mob_y = if life.foothold != 0 {
+                        if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
+                            map.get_foothold_y_at(fh, mob_x)
+                        } else {
+                            life.y as f32
+                        }
+                    } else {
+                        life.y as f32
+                    };
+                    (mob_x, mob_y, life.flip)
                 }
             } else {
                 // NPCs use static positions, but snap Y to foothold
                 let npc_x = life.x as f32;
-                let mut npc_y = life.y as f32;
+                let spawn_y = life.y as f32;
+                let mut npc_y = spawn_y;
                 
                 // First try to snap NPC to its specified foothold
                 if life.foothold != 0 {
                     if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
-                        npc_y = map.get_foothold_y_at(fh, npc_x);
+                        // Check if spawn X is within foothold bounds
+                        let fh_left = fh.x1.min(fh.x2);
+                        let fh_right = fh.x1.max(fh.x2);
+                        if npc_x as i32 >= fh_left && npc_x as i32 <= fh_right {
+                            npc_y = map.get_foothold_y_at(fh, npc_x);
+                        } else {
+                            // Foothold specified but X is outside bounds, find nearest below
+                            if let Some((fh_y, _)) = map.find_foothold_below(npc_x, spawn_y) {
+                                npc_y = fh_y;
+                            }
+                        }
+                    } else {
+                        // Foothold ID not found, find nearest below
+                        if let Some((fh_y, _)) = map.find_foothold_below(npc_x, spawn_y) {
+                            npc_y = fh_y;
+                        }
                     }
                 } else {
                     // No foothold specified, find the nearest one below
-                    if let Some((fh_y, _)) = map.find_foothold_below(npc_x, npc_y) {
+                    if let Some((fh_y, _)) = map.find_foothold_below(npc_x, spawn_y) {
                         npc_y = fh_y;
                     }
                 }
@@ -504,6 +578,39 @@ impl MapRenderer {
             // Draw endpoints
             draw_circle(screen_x1, screen_y1, 3.0, color);
             draw_circle(screen_x2, screen_y2, 3.0, color);
+        }
+    }
+
+    /// Render fake players
+    fn render_fake_players(&self, bot_ai: &BotAI, camera_x: f32, camera_y: f32) {
+        for player in &bot_ai.fake_players {
+            let screen_x = player.x - camera_x;
+            let screen_y = player.y - camera_y;
+
+            // Draw player body (simple colored rectangle for now)
+            let body_color = Color::from_rgba(100, 150, 255, 255);
+            draw_rectangle(screen_x - 12.0, screen_y - 25.0, 24.0, 50.0, body_color);
+            
+            // Draw head
+            draw_circle(screen_x, screen_y - 35.0, 10.0, Color::from_rgba(255, 220, 180, 255));
+            
+            // Draw direction indicator
+            let eye_x = if player.facing_right { screen_x + 3.0 } else { screen_x - 3.0 };
+            draw_circle(eye_x, screen_y - 37.0, 2.0, BLACK);
+
+            // Draw player name above
+            let name_width = measure_text(&player.name, None, 12, 1.0).width;
+            let name_x = screen_x - name_width / 2.0;
+            let name_y = screen_y - 55.0;
+            
+            // Name background
+            draw_rectangle(name_x - 2.0, name_y - 10.0, name_width + 4.0, 14.0, Color::from_rgba(0, 0, 0, 150));
+            draw_text(&player.name, name_x, name_y, 12.0, WHITE);
+            
+            // Draw level
+            let level_text = format!("Lv.{}", player.level);
+            let level_width = measure_text(&level_text, None, 10, 1.0).width;
+            draw_text(&level_text, screen_x - level_width / 2.0, name_y - 12.0, 10.0, YELLOW);
         }
     }
 

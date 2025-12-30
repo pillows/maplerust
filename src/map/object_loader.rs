@@ -1,3 +1,4 @@
+#[allow(non_snake_case)]
 use macroquad::prelude::*;
 use crate::assets::AssetManager;
 use std::collections::HashMap;
