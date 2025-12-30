@@ -470,7 +470,8 @@ impl MapRenderer {
             };
 
             // Calculate screen position
-            // Apply origin offset: origin defines the anchor point of the sprite
+            // For mobs, position so their feet are at the foothold level
+            // origin_y is typically the distance from top of sprite to anchor point
             let screen_x = pos_x - camera_x - life.origin_x as f32;
             let screen_y = pos_y - camera_y - life.origin_y as f32;
 
@@ -587,21 +588,24 @@ impl MapRenderer {
             let screen_x = player.x - camera_x;
             let screen_y = player.y - camera_y;
 
-            // Draw player body (simple colored rectangle for now)
-            let body_color = Color::from_rgba(100, 150, 255, 255);
-            draw_rectangle(screen_x - 12.0, screen_y - 25.0, 24.0, 50.0, body_color);
+            // Draw player body (character-like shape)
+            let body_color = Color::from_rgba(80, 120, 200, 255);
+            let skin_color = Color::from_rgba(255, 220, 180, 255);
             
-            // Draw head
-            draw_circle(screen_x, screen_y - 35.0, 10.0, Color::from_rgba(255, 220, 180, 255));
-            
-            // Draw direction indicator
-            let eye_x = if player.facing_right { screen_x + 3.0 } else { screen_x - 3.0 };
-            draw_circle(eye_x, screen_y - 37.0, 2.0, BLACK);
+            // Body
+            draw_rectangle(screen_x - 10.0, screen_y - 35.0, 20.0, 30.0, body_color);
+            // Head
+            draw_rectangle(screen_x - 8.0, screen_y - 50.0, 16.0, 16.0, skin_color);
+            // Hair
+            draw_rectangle(screen_x - 9.0, screen_y - 55.0, 18.0, 8.0, Color::from_rgba(60, 40, 20, 255));
+            // Legs
+            draw_rectangle(screen_x - 8.0, screen_y - 5.0, 6.0, 10.0, body_color);
+            draw_rectangle(screen_x + 2.0, screen_y - 5.0, 6.0, 10.0, body_color);
 
             // Draw player name above
             let name_width = measure_text(&player.name, None, 12, 1.0).width;
             let name_x = screen_x - name_width / 2.0;
-            let name_y = screen_y - 55.0;
+            let name_y = screen_y - 65.0;
             
             // Name background
             draw_rectangle(name_x - 2.0, name_y - 10.0, name_width + 4.0, 14.0, Color::from_rgba(0, 0, 0, 150));

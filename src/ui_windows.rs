@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use crate::assets::AssetManager;
 use std::sync::Arc;
+use std::collections::HashMap;
 use wz_reader::version::guess_iv_from_wz_img;
 use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzNodeCast};
 
@@ -13,20 +14,28 @@ struct TextureWithOrigin {
     origin: Vec2,
 }
 
+/// Item data for inventory display
+#[derive(Clone)]
+struct ItemIcon {
+    texture: Texture2D,
+    item_id: String,
+}
+
 #[derive(Clone)]
 pub struct InventoryWindow {
     pub visible: bool,
     loaded: bool,
-    // Background layers (z-order: backgrnd, backgrnd2, backgrnd3)
     backgrnd: Option<TextureWithOrigin>,
     backgrnd2: Option<TextureWithOrigin>,
     backgrnd3: Option<TextureWithOrigin>,
-    // Window position
     x: f32,
     y: f32,
     dragging: bool,
     drag_offset_x: f32,
     drag_offset_y: f32,
+    // Item icons
+    items: Vec<ItemIcon>,
+    items_loaded: bool,
 }
 
 impl InventoryWindow {
@@ -42,6 +51,8 @@ impl InventoryWindow {
             dragging: false,
             drag_offset_x: 0.0,
             drag_offset_y: 0.0,
+            items: Vec::new(),
+            items_loaded: false,
         }
     }
 
@@ -59,6 +70,56 @@ impl InventoryWindow {
                 self.loaded = false;
             }
         }
+        
+        // Load some item icons
+        self.load_items().await;
+    }
+
+    async fn load_items(&mut self) {
+        // Try to load items from 0501.img
+        let url = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/Item/Cash/0501.img";
+        let cache = "/01/Item/Cash/0501.img";
+        
+        if let Ok(bytes) = AssetManager::fetch_and_cache(url, cache).await {
+            if let Some(wz_iv) = guess_iv_from_wz_img(&bytes) {
+                let byte_len = bytes.len();
+                let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
+                let cache_name_ref: wz_reader::WzNodeName = cache.to_string().into();
+                let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
+                let root_node: WzNodeArc = WzNode::new(&cache.to_string().into(), wz_image, None).into();
+
+                if root_node.write().unwrap().parse(&root_node).is_ok() {
+                    // Get first few item IDs
+                    let item_ids: Vec<String> = {
+                        let root_read = root_node.read().unwrap();
+                        root_read.children.keys()
+                            .filter(|k| k.as_str().starts_with("0501"))
+                            .take(8)
+                            .map(|k| k.to_string())
+                            .collect()
+                    };
+
+                    for item_id in item_ids {
+                        let icon_path = format!("{}/info/icon", item_id);
+                        if let Some(tex) = Self::load_item_icon(&root_node, &icon_path).await {
+                            self.items.push(ItemIcon { texture: tex, item_id });
+                        }
+                    }
+                    self.items_loaded = true;
+                    info!("Loaded {} item icons", self.items.len());
+                }
+            }
+        }
+    }
+
+    async fn load_item_icon(root: &WzNodeArc, path: &str) -> Option<Texture2D> {
+        let node = root.read().unwrap().at_path(path)?.clone();
+        node.write().unwrap().parse(&node).ok()?;
+        let node_read = node.read().unwrap();
+        let png = node_read.try_as_png()?;
+        let img = png.extract_png().ok()?;
+        let rgba = img.to_rgba8();
+        Some(Texture2D::from_rgba8(rgba.width() as u16, rgba.height() as u16, &rgba.into_raw()))
     }
 
     async fn load_from_wz() -> Result<InventoryWindowData, String> {
@@ -172,6 +233,26 @@ impl InventoryWindow {
         if let Some(bg3) = &self.backgrnd3 {
             draw_texture(&bg3.texture, self.x - bg3.origin.x, self.y - bg3.origin.y, WHITE);
         }
+
+        // Draw item icons in a grid (4 columns, starting after some padding)
+        let slot_size = 32.0;
+        let slot_gap = 4.0;
+        let start_x = self.x + 12.0;
+        let start_y = self.y + 52.0;
+        let cols = 4;
+
+        for (i, item) in self.items.iter().enumerate() {
+            let col = i % cols;
+            let row = i / cols;
+            let ix = start_x + col as f32 * (slot_size + slot_gap);
+            let iy = start_y + row as f32 * (slot_size + slot_gap);
+            draw_texture(&item.texture, ix, iy, WHITE);
+        }
+
+        // Draw currency at bottom of window
+        let currency_y = self.y + 200.0; // Adjust based on window height
+        draw_text("Mesos:", self.x + 10.0, currency_y, 12.0, WHITE);
+        draw_text("1,234,567", self.x + 60.0, currency_y, 12.0, YELLOW);
     }
 }
 
@@ -340,11 +421,13 @@ impl EquipWindow {
 #[derive(Clone)]
 pub struct UserInfoWindow {
     pub visible: bool,
+    x: f32,
+    y: f32,
 }
 
 impl UserInfoWindow {
     pub fn new() -> Self {
-        Self { visible: false }
+        Self { visible: false, x: 200.0, y: 200.0 }
     }
 
     pub async fn load_assets(&mut self) {
@@ -352,18 +435,42 @@ impl UserInfoWindow {
     }
 
     pub fn update(&mut self) {
-        // TODO: Update user info window state
+        if !self.visible { return; }
+        
+        // Close on ESC or click outside
+        if is_key_pressed(KeyCode::Escape) {
+            self.visible = false;
+        }
     }
 
     pub fn show(&mut self) {
         self.visible = true;
+        // Center on screen
+        self.x = (screen_width() - 200.0) / 2.0;
+        self.y = (screen_height() - 150.0) / 2.0;
     }
 
-    pub fn draw(&self, _name: &str, _level: u32) {
-        if !self.visible {
-            return;
-        }
-        // TODO: Draw user info window
+    pub fn draw(&self, name: &str, level: u32) {
+        if !self.visible { return; }
+        
+        let width = 200.0;
+        let height = 150.0;
+        
+        // Draw background
+        draw_rectangle(self.x, self.y, width, height, Color::from_rgba(40, 40, 60, 240));
+        draw_rectangle_lines(self.x, self.y, width, height, 2.0, Color::from_rgba(100, 100, 140, 255));
+        
+        // Draw title
+        draw_text("Character Info", self.x + 10.0, self.y + 25.0, 18.0, WHITE);
+        draw_line(self.x + 5.0, self.y + 35.0, self.x + width - 5.0, self.y + 35.0, 1.0, GRAY);
+        
+        // Draw info
+        draw_text(&format!("Name: {}", name), self.x + 15.0, self.y + 60.0, 14.0, WHITE);
+        draw_text(&format!("Level: {}", level), self.x + 15.0, self.y + 80.0, 14.0, WHITE);
+        draw_text("Job: Beginner", self.x + 15.0, self.y + 100.0, 14.0, WHITE);
+        
+        // Draw close hint
+        draw_text("Press ESC to close", self.x + 10.0, self.y + height - 15.0, 10.0, GRAY);
     }
 }
 

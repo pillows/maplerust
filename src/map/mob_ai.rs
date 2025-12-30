@@ -72,8 +72,8 @@ impl MobState {
             None
         };
         
-        let y = if let Some(fh) = foothold {
-            // Calculate Y position on the foothold at spawn X
+        // Calculate foothold Y position
+        let fh_y = if let Some(fh) = foothold {
             let dx = fh.x2 - fh.x1;
             let dy = fh.y2 - fh.y1;
             let ix = x as i32;
@@ -86,15 +86,16 @@ impl MobState {
         } else {
             // No foothold specified or not found, find the nearest one below the spawn point
             let spawn_y = life.y as f32;
-            if let Some((fh_y, _)) = map.find_foothold_below(x, spawn_y) {
-                fh_y
+            if let Some((found_y, _)) = map.find_foothold_below(x, spawn_y) {
+                found_y
             } else {
-                // Last resort: use original Y but log warning
-                // Mob could not find foothold, using original Y
-                eprintln!("Mob {} at ({}, {}) could not find foothold, using original Y", life.id, x, spawn_y);
                 spawn_y
             }
         };
+        
+        // The mob's Y position should be at the foothold level
+        // The origin offset is applied during rendering, not here
+        let y = fh_y;
         
         // Determine patrol bounds based on foothold or spawn area
         let (patrol_left, patrol_right) = if let Some(fh) = foothold {

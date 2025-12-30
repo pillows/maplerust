@@ -171,6 +171,14 @@ impl GameplayState {
 
     /// Load a specific map by ID
     async fn load_map(&mut self, map_id: &str) {
+        // Close all UI windows when changing maps
+        self.inventory_window.visible = false;
+        self.equip_window.visible = false;
+        self.user_info_window.visible = false;
+        self.key_config.hide();
+        self.game_menu.hide();
+        self.npc_dialog.close_dialog();
+        self.cash_shop.hide();
 
         match MapLoader::load_map(map_id).await {
             Ok(map) => {
@@ -395,24 +403,26 @@ impl GameplayState {
         }
         // Portal textures are already loaded in each Portal structure during map parsing
 
-        // Handle debug map input toggle with M key
-        if DebugFlags::should_show_debug_ui() && is_key_pressed(KeyCode::M) {
-            if self.map_input_active {
-                // Close the input and trigger loading if valid
-                if !self.map_input.is_empty() {
-                    self.loading_new_map = true;
-                    self.map_input_active = false;
-                    // Clear target portal for debug map loading (use spawn portal)
-                    self.target_portal_name = None;
+        // Handle M key - toggle minimap OR map loader depending on flags
+        if is_key_pressed(KeyCode::M) {
+            if flags::SHOW_MAP_LOADER {
+                // Toggle map loader input
+                if self.map_input_active {
+                    if !self.map_input.is_empty() {
+                        self.loading_new_map = true;
+                        self.map_input_active = false;
+                        self.target_portal_name = None;
+                    } else {
+                        self.map_input_active = false;
+                        self.map_input.clear();
+                    }
                 } else {
-                    // Just close if empty
-                    self.map_input_active = false;
-                    self.map_input.clear();
+                    self.map_input_active = true;
+                    self.map_input = self.current_map_id.clone();
                 }
             } else {
-                // Open the input
-                self.map_input_active = true;
-                self.map_input = self.current_map_id.clone();
+                // Toggle minimap visibility
+                self.minimap.toggle();
             }
         }
 
@@ -682,10 +692,10 @@ impl GameplayState {
                                 // Double-click detected! Show NPC dialog
                                 info!("NPC interaction created: {} (ID: {})", life.name, life.id);
                                 
-                                // Show NPC dialog UI with sample text
-                                let npc_dialog_text = format!("Hello! I'm {}. Lorem ipsum dolor sit amet, consectetur adipiscing elit. How can I help you today?", 
+                                // Show NPC dialog UI with sample text and NPC texture
+                                let npc_dialog_text = format!("Hello! I'm {}. How can I help you today?", 
                                     if !life.name.is_empty() { &life.name } else { "an NPC" });
-                                self.npc_dialog.show_dialog(&npc_dialog_text, npc_x, npc_y - life.origin_y as f32);
+                                self.npc_dialog.show_dialog_with_npc(&npc_dialog_text, npc_x, npc_y - life.origin_y as f32, life.texture.clone());
                                 
                                 // Reset click tracking to prevent triple-clicks from triggering again
                                 self.last_npc_click_time = -1.0;
@@ -1353,8 +1363,8 @@ impl GameplayState {
             );
         }
 
-        // Debug map loader UI
-        if DebugFlags::should_show_debug_ui() {
+        // Debug map loader UI - always show if SHOW_MAP_LOADER is enabled
+        if flags::SHOW_MAP_LOADER {
             self.draw_map_loader_ui();
         }
 

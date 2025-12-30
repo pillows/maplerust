@@ -19,6 +19,9 @@ pub const SHOW_DEBUG_UI: bool = false;
 /// Show FPS counter (separate from full debug UI)
 pub const SHOW_FPS: bool = true;
 
+/// Show debug map loader UI (press M to toggle)
+pub const SHOW_MAP_LOADER: bool = true;
+
 /// Enable verbose logging for asset loading
 pub const VERBOSE_ASSET_LOADING: bool = false;
 

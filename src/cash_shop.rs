@@ -142,20 +142,20 @@ impl CashShop {
         root_node.write().unwrap().parse(&root_node)
             .map_err(|e| format!("Failed to parse CashShop.img: {:?}", e))?;
 
-        // Load background
-        let bg = Self::load_texture(&root_node, "backgrnd").await.ok();
+        // Load background from Base/backgrnd
+        let bg = Self::load_texture(&root_node, "Base/backgrnd").await.ok();
 
-        // Load exit button
+        // Load exit button from CSStatus/BtExit
         let mut exit_btn = CashShopButton::new();
-        if let Ok(normal) = Self::load_texture_simple(&root_node, "BtExit/normal/0").await {
+        if let Ok(normal) = Self::load_texture_simple(&root_node, "CSStatus/BtExit/normal/0").await {
             exit_btn.width = normal.width();
             exit_btn.height = normal.height();
             exit_btn.normal = Some(normal);
         }
-        if let Ok(hover) = Self::load_texture_simple(&root_node, "BtExit/mouseOver/0").await {
+        if let Ok(hover) = Self::load_texture_simple(&root_node, "CSStatus/BtExit/mouseOver/0").await {
             exit_btn.mouse_over = Some(hover);
         }
-        if let Ok(pressed) = Self::load_texture_simple(&root_node, "BtExit/pressed/0").await {
+        if let Ok(pressed) = Self::load_texture_simple(&root_node, "CSStatus/BtExit/pressed/0").await {
             exit_btn.pressed = Some(pressed);
         }
 
@@ -243,55 +243,21 @@ impl CashShop {
             return;
         }
 
-        // Draw semi-transparent overlay
-        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::from_rgba(0, 0, 0, 200));
+        // Fill entire screen with black
+        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), BLACK);
 
-        // Draw background centered
+        // Draw background centered/tiled
         if let Some(bg) = &self.background {
             let x = (screen_width() - bg.width()) / 2.0;
             let y = (screen_height() - bg.height()) / 2.0;
             draw_texture(bg, x, y, WHITE);
         }
 
-        // Draw title
-        let title = "Cash Shop";
-        let title_width = measure_text(title, None, 32, 1.0).width;
-        draw_text(title, (screen_width() - title_width) / 2.0, 60.0, 32.0, WHITE);
-
         // Draw exit button
         self.exit_button.draw();
 
-        // Draw placeholder content
-        let content_y = 100.0;
-        draw_text("Welcome to the Cash Shop!", screen_width() / 2.0 - 100.0, content_y, 20.0, WHITE);
-        draw_text("Press ESC or click Exit to return to the game", screen_width() / 2.0 - 150.0, content_y + 30.0, 16.0, LIGHTGRAY);
-
-        // Draw categories placeholder
-        let categories = ["Hot Items", "Equipment", "Use", "Setup", "Etc", "Pet"];
-        let mut cat_x = 100.0;
-        let cat_y = 150.0;
-        for cat in categories {
-            draw_rectangle(cat_x, cat_y, 100.0, 30.0, Color::from_rgba(60, 60, 80, 200));
-            draw_rectangle_lines(cat_x, cat_y, 100.0, 30.0, 1.0, Color::from_rgba(100, 100, 120, 255));
-            draw_text(cat, cat_x + 10.0, cat_y + 20.0, 14.0, WHITE);
-            cat_x += 110.0;
-        }
-
-        // Draw item grid placeholder
-        let grid_x = 100.0;
-        let grid_y = 200.0;
-        let slot_size = 60.0;
-        let cols = 8;
-        let rows = 4;
-
-        for row in 0..rows {
-            for col in 0..cols {
-                let x = grid_x + col as f32 * (slot_size + 5.0);
-                let y = grid_y + row as f32 * (slot_size + 5.0);
-                draw_rectangle(x, y, slot_size, slot_size, Color::from_rgba(40, 40, 50, 200));
-                draw_rectangle_lines(x, y, slot_size, slot_size, 1.0, Color::from_rgba(80, 80, 100, 200));
-            }
-        }
+        // Simple instruction text
+        draw_text("Press ESC to exit", screen_width() / 2.0 - 60.0, screen_height() - 30.0, 16.0, GRAY);
     }
 }
 

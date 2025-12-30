@@ -286,6 +286,11 @@ impl MiniMap {
         // TODO: Load actual minimap canvas from map data if available
     }
 
+    /// Toggle minimap visibility
+    pub fn toggle(&mut self) {
+        self.visible = !self.visible;
+    }
+
     /// Update minimap state
     pub fn update(&mut self) {
         if !self.loaded || !self.visible {

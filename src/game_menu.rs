@@ -334,13 +334,26 @@ impl GameMenu {
         self.visible = false;
     }
 
-    /// Toggle visibility
+    /// Toggle visibility - show above the menu button
     pub fn toggle(&mut self) {
         if self.visible {
             self.hide();
         } else {
-            // Show near bottom-center of screen
-            self.show(screen_width() / 2.0 - self.width / 2.0, screen_height() - self.height - 100.0);
+            // Show above the menu button at bottom-right of status bar
+            // Position menu so its bottom aligns just above the status bar (~70px from bottom)
+            let menu_x = screen_width() / 2.0 + 180.0 - self.width;
+            let menu_y = screen_height() - 70.0 - self.height;
+            self.show(menu_x, menu_y);
+        }
+    }
+
+    /// Toggle visibility at specific position (above button)
+    pub fn toggle_at(&mut self, button_x: f32, button_y: f32) {
+        if self.visible {
+            self.hide();
+        } else {
+            // Show above the button
+            self.show(button_x - self.width / 2.0, button_y - self.height);
         }
     }
 

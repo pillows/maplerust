@@ -1105,10 +1105,10 @@ impl StatusBarUI {
 
         // Draw gauges (HP, MP, EXP) - pass base_x/base_y for positioning
         if gauge_bg_pos.is_some() {
-            // Always show gauges at 100%
+            // HP and MP at 100%, EXP at 50%
             self.draw_gauge("hp", 1.0, base_x, base_y);
             self.draw_gauge("mp", 1.0, base_x, base_y);
-            self.draw_gauge("exp", 1.0, base_x, base_y);
+            self.draw_gauge("exp", 0.5, base_x, base_y);  // 50% EXP
 
             // Draw HP/MP/EXP numbers
             self.draw_gauge_numbers("hp", character.hp, character.hp, base_x, base_y);
