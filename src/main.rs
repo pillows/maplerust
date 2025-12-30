@@ -9,6 +9,7 @@ mod game_world;
 mod flags;
 mod map;
 mod audio;
+mod cursor;
 
 #[macroquad::main("RustMaple")]
 async fn main() {

@@ -5,6 +5,7 @@ use crate::map::{MapData, MapLoader, MapRenderer, MobState, MobAI};
 use crate::map::portal_loader::PortalCache;
 use crate::game_world::bot_ai::BotAI;
 use crate::audio::AudioManager;
+use crate::cursor::{CursorManager, CursorState};
 
 /// Gameplay state for when the player is in the game world
 pub struct GameplayState {
@@ -44,6 +45,8 @@ pub struct GameplayState {
     // Focus tracking
     window_focused: bool,
     last_dt: f32,
+    // Cursor manager
+    cursor_manager: CursorManager,
 }
 
 impl GameplayState {
@@ -82,6 +85,7 @@ impl GameplayState {
             last_npc_click_id: None,
             window_focused: true,
             last_dt: 0.016, // Default to ~60fps
+            cursor_manager: CursorManager::new(),
         }
     }
 
@@ -91,6 +95,12 @@ impl GameplayState {
 
         // Load font for NPC names
         self.map_renderer.load_font().await;
+
+        // Load custom MapleStory cursors
+        self.cursor_manager.load_cursors().await;
+
+        // Hide OS cursor so custom cursor can be used
+        show_mouse(false);
 
         // Portal textures are now loaded during map parsing
         // Each portal has its own textures embedded in the Portal structure
@@ -732,6 +742,52 @@ impl GameplayState {
         // Update bot AI
         self.bot_ai.update(clamped_dt, map);
 
+        // Update cursor animation
+        self.cursor_manager.update(clamped_dt);
+
+        // Update cursor state based on mouse position (check NPC hover)
+        let (mouse_x, mouse_y) = mouse_position();
+        let world_x = mouse_x + self.camera_x;
+        let world_y = mouse_y + self.camera_y;
+
+        let mut cursor_state = CursorState::Default;
+        for life in &map.life {
+            if life.life_type == "n" && !life.hide {
+                // Calculate NPC position (snapped to foothold if available)
+                let mut npc_x = life.x as f32;
+                let mut npc_y = life.y as f32;
+
+                if life.foothold != 0 {
+                    if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
+                        let dx = fh.x2 - fh.x1;
+                        let dy = fh.y2 - fh.y1;
+                        let ix = npc_x as i32;
+                        let fh_y = if dx != 0 {
+                            (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
+                        } else {
+                            fh.y1 as f32
+                        };
+                        npc_y = fh_y;
+                    }
+                }
+
+                // Check if mouse is within NPC bounds
+                let npc_width = if let Some(tex) = &life.texture { tex.width() } else { 40.0 };
+                let npc_height = if let Some(tex) = &life.texture { tex.height() } else { 60.0 };
+                let npc_min_x = npc_x - life.origin_x as f32;
+                let npc_max_x = npc_min_x + npc_width;
+                let npc_min_y = npc_y - life.origin_y as f32;
+                let npc_max_y = npc_min_y + npc_height;
+
+                if world_x >= npc_min_x && world_x <= npc_max_x &&
+                   world_y >= npc_min_y && world_y <= npc_max_y {
+                    cursor_state = CursorState::NpcHover;
+                    break;
+                }
+            }
+        }
+        self.cursor_manager.set_state(cursor_state);
+
         // Camera follows player (unless in camera debug mode)
         if !flags::CAMERA_DEBUG_MODE {
             // Center camera on player
@@ -849,6 +905,9 @@ impl GameplayState {
 
         // Draw UI
         self.draw_ui();
+
+        // Draw custom MapleStory cursor (drawn last so it's on top)
+        self.cursor_manager.draw();
     }
 
     /// Draw the game UI
