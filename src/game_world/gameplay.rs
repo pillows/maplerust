@@ -7,6 +7,7 @@ use crate::game_world::bot_ai::BotAI;
 use crate::audio::AudioManager;
 use crate::cursor::{CursorManager, CursorState};
 use crate::character_info_ui::StatusBarUI;
+use futures;
 
 /// Gameplay state for when the player is in the game world
 pub struct GameplayState {
@@ -95,36 +96,38 @@ impl GameplayState {
 
     /// Load game assets including the map
     pub async fn load_assets(&mut self) {
-        info!("Loading gameplay assets...");
+        // info!("GameplayState::load_assets() - starting parallel load");
 
-        // Load font for NPC names
-        self.map_renderer.load_font().await;
+        // Load font, cursors, and status bar in parallel
+        let font_load = self.map_renderer.load_font();
+        let cursor_load = self.cursor_manager.load_cursors();
+        let status_bar_load = self.status_bar.load_assets();
 
-        // Load custom MapleStory cursors
-        self.cursor_manager.load_cursors().await;
+        // info!("Waiting for UI assets to load in parallel...");
+        // Wait for all UI assets to load
+        let _ = futures::join!(font_load, cursor_load, status_bar_load);
 
-        // Hide OS cursor so custom cursor can be used
-        show_mouse(false);
+        // info!("UI assets loaded. Font: ok, Cursors: {}, StatusBar: {}",
+        //       self.cursor_manager.is_loaded(),
+        //       self.status_bar.is_loaded());
 
-        // Load status bar UI
-        self.status_bar.load_assets().await;
-
-        // Portal textures are now loaded during map parsing
-        // Each portal has its own textures embedded in the Portal structure
+        // Hide OS cursor if custom cursors loaded
+        if self.cursor_manager.is_loaded() {
+            show_mouse(false);
+        } else {
+            show_mouse(true);
+        }
 
         // Load map
         self.load_map(&self.current_map_id.clone()).await;
         self.loaded = true;
-        info!("Gameplay assets loaded successfully");
     }
 
     /// Load a specific map by ID
     async fn load_map(&mut self, map_id: &str) {
-        info!("Loading map: {}", map_id);
 
         match MapLoader::load_map(map_id).await {
             Ok(map) => {
-                info!("Map loaded successfully!");
 
                 // Determine spawn position based on target portal or spawn point
                 let mut spawn_x;
@@ -137,18 +140,14 @@ impl GameplayState {
                     if let Some(portal) = map.portals.iter().find(|p| p.pn == *target_portal_name) {
                         spawn_x = portal.x as f32;
                         spawn_y = portal.y as f32;
-                        info!("Found target portal '{}' at: ({}, {})", target_portal_name, spawn_x, spawn_y);
                     } else {
                         // Fallback to spawn portal if target not found
-                        warn!("Target portal '{}' not found, using spawn portal", target_portal_name);
                         if let Some(spawn_portal) = map.portals.iter().find(|p| p.pt == 0) {
                             spawn_x = spawn_portal.x as f32;
                             spawn_y = spawn_portal.y as f32;
-                            info!("Found spawn portal at: ({}, {})", spawn_x, spawn_y);
                         } else {
                             spawn_x = ((map.info.vr_left + map.info.vr_right) / 2) as f32;
                             spawn_y = map.info.vr_top as f32 + 100.0;
-                            info!("No spawn portal found, using default position: ({}, {})", spawn_x, spawn_y);
                         }
                     }
                 } else {
@@ -156,12 +155,10 @@ impl GameplayState {
                     if let Some(spawn_portal) = map.portals.iter().find(|p| p.pt == 0) {
                         spawn_x = spawn_portal.x as f32;
                         spawn_y = spawn_portal.y as f32;
-                        info!("Found spawn portal at: ({}, {})", spawn_x, spawn_y);
                     } else {
                         // Default spawn position in center of map
                         spawn_x = ((map.info.vr_left + map.info.vr_right) / 2) as f32;
                         spawn_y = map.info.vr_top as f32 + 100.0;
-                        info!("No spawn portal found, using default position: ({}, {})", spawn_x, spawn_y);
                     }
                 }
 
@@ -172,14 +169,12 @@ impl GameplayState {
                     self.player_y = foothold_y - 30.0; // Subtract player height offset
                     self.player_vy = 0.0;
                     self.on_ground = true;
-                    info!("Player placed on foothold at: ({}, {})", self.player_x, self.player_y);
                 } else {
                     // No foothold found, use spawn position directly
                     self.player_x = spawn_x;
                     self.player_y = spawn_y;
                     self.player_vy = 0.0;
                     self.on_ground = false;
-                    warn!("No foothold found below spawn point, player may fall");
                 }
 
                 // Initialize bot AI from map data
@@ -188,14 +183,7 @@ impl GameplayState {
                 // Save viewport bounds before moving map
                 let vr_left = map.info.vr_left as f32;
                 let vr_right = map.info.vr_right as f32;
-                let vr_top = map.info.vr_top as f32;
                 let vr_bottom = map.info.vr_bottom as f32;
-
-                // Log viewport bounds for debugging
-                info!("Map viewport bounds:");
-                info!("  VR_LEFT: {}, VR_RIGHT: {}", vr_left, vr_right);
-                info!("  VR_TOP: {}, VR_BOTTOM: {}", vr_top, vr_bottom);
-                info!("  Map width: {}, Map height: {}", vr_right - vr_left, vr_bottom - vr_top);
 
                 // Calculate and cache foothold extent
                 self.foothold_min_x = vr_left;
@@ -204,11 +192,8 @@ impl GameplayState {
                     self.foothold_min_x = self.foothold_min_x.min(fh.x1.min(fh.x2) as f32);
                     self.foothold_max_x = self.foothold_max_x.max(fh.x1.max(fh.x2) as f32);
                 }
-                info!("Foothold extent: {} to {} (viewport: {} to {})",
-                      self.foothold_min_x, self.foothold_max_x, vr_left, vr_right);
 
                 // Stop any currently playing BGM before loading new map
-                info!("Stopping previous map's BGM before loading new map");
                 self.audio_manager.stop_bgm();
 
                 // Store BGM name before moving map
@@ -219,13 +204,7 @@ impl GameplayState {
                 self.loading_new_map = false;
 
                 // Set BGM pending flag for playback in update method
-                if !bgm_name.is_empty() {
-                    info!("New map loaded with BGM: '{}' (will play after user interaction)", bgm_name);
-                    self.bgm_pending = true;
-                } else {
-                    info!("New map loaded with no BGM");
-                    self.bgm_pending = false;
-                }
+                self.bgm_pending = !bgm_name.is_empty();
 
                 // Initialize camera position - center on player but clamp to boundaries
                 let target_camera_x = self.player_x - screen_width() / 2.0;
@@ -582,7 +561,7 @@ impl GameplayState {
                     self.loading_new_map = true;
                     self.map_input = target_map_id;
                 } else {
-                    info!("Portal has no target map (tm = 999999999)");
+                    // info!("Portal has no target map (tm = 999999999)");
                 }
             } else {
                 // No portal activated, try to grab a nearby ladder/rope

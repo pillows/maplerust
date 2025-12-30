@@ -88,7 +88,7 @@ impl TileCache {
 
         // Check if we already have this WZ node cached
         let root_node = if let Some(cached_node) = self.wz_nodes.get(tileset_name) {
-            info!("  Using cached WZ node for {}.img", tileset_name);
+            // info!("  Using cached WZ node for {}.img", tileset_name);
             cached_node.clone()
         } else {
             // Build URL for the tile file

@@ -436,17 +436,17 @@ impl MapRenderer {
         if unsafe { !LOGGED_PORTAL_STATS } {
             let total_portals = map.portals.len();
             let with_textures = map.portals.iter().filter(|p| !p.textures.is_empty()).count();
-            info!("=== PORTAL RENDERING ===");
-            info!("  Total portals in map: {}", total_portals);
-            info!("  Portals with textures: {}", with_textures);
-            info!("  Portals without textures: {}", total_portals - with_textures);
+            // info!("=== PORTAL RENDERING ===");
+            // info!("  Total portals in map: {}", total_portals);
+            // info!("  Portals with textures: {}", with_textures);
+            // info!("  Portals without textures: {}", total_portals - with_textures);
 
             // Show first few portal details
             for (i, portal) in map.portals.iter().take(3).enumerate() {
-                info!("  Portal {}: type={}, textures={}, pos=({},{})",
-                      i, portal.pt, portal.textures.len(), portal.x, portal.y);
+                //     info!("  Portal {}: type={}, textures={}, pos=({},{})",
+                //           i, portal.pt, portal.textures.len(), portal.x, portal.y);
             }
-            info!("========================");
+            // info!("========================");
             unsafe { LOGGED_PORTAL_STATS = true; }
         }
 

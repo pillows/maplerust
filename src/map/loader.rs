@@ -185,37 +185,37 @@ impl MapLoader {
         #[cfg(not(target_arch = "wasm32"))]
         let total_time = total_start.elapsed();
 
-        info!("=== MAP LOADED SUCCESSFULLY ===");
-        info!("  Map ID: {}", map_id);
-        info!("  Map Name: {}", if !map_data.info.map_name.is_empty() { &map_data.info.map_name } else { "Unknown" });
-        info!("  Backgrounds: {}", map_data.backgrounds.len());
-        info!("  Tiles: {}", map_data.tiles.len());
-        info!("  Objects: {}", map_data.objects.len());
-        info!("  Footholds: {}", map_data.footholds.len());
-        info!("  Portals: {}", map_data.portals.len());
-        info!("  Life (NPCs/Mobs): {}", map_data.life.len());
-        info!("  Ladders/Ropes: {}", map_data.ladders.len());
-        info!("  Map Bounds: ({}, {}) to ({}, {})",
-              map_data.info.vr_left, map_data.info.vr_top,
-              map_data.info.vr_right, map_data.info.vr_bottom);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            info!("--- Loading Time Breakdown ---");
-            info!("  Fetch map file: {:?}", fetch_time);
-            info!("  Backgrounds:    {:?}", bg_time);
-            info!("  Life (NPCs):    {:?}", life_time);
-            info!("  Tiles:          {:?}", tiles_time);
-            info!("  Objects:        {:?}", objects_time);
-            info!("  TOTAL:          {:?}", total_time);
-        }
-        info!("===============================");
+        // info!("=== MAP LOADED SUCCESSFULLY ===");
+        // info!("  Map ID: {}", map_id);
+        // info!("  Map Name: {}", if !map_data.info.map_name.is_empty() { &map_data.info.map_name } else { "Unknown" });
+        // info!("  Backgrounds: {}", map_data.backgrounds.len());
+        // info!("  Tiles: {}", map_data.tiles.len());
+        // info!("  Objects: {}", map_data.objects.len());
+        // info!("  Footholds: {}", map_data.footholds.len());
+        // info!("  Portals: {}", map_data.portals.len());
+        // info!("  Life (NPCs/Mobs): {}", map_data.life.len());
+        // info!("  Ladders/Ropes: {}", map_data.ladders.len());
+        // info!("  Map Bounds: ({}, {}) to ({}, {})",
+        //       map_data.info.vr_left, map_data.info.vr_top,
+        //       map_data.info.vr_right, map_data.info.vr_bottom);
+        // #[cfg(not(target_arch = "wasm32"))]
+        // {
+        //     info!("--- Loading Time Breakdown ---");
+        //     info!("  Fetch map file: {:?}", fetch_time);
+        //     info!("  Backgrounds:    {:?}", bg_time);
+        //     info!("  Life (NPCs):    {:?}", life_time);
+        //     info!("  Tiles:          {:?}", tiles_time);
+        //     info!("  Objects:        {:?}", objects_time);
+        //     info!("  TOTAL:          {:?}", total_time);
+        // }
+        // info!("===============================");
 
         // Sort tiles and objects once during load (not every frame during rendering!)
         // This dramatically improves FPS by avoiding clone + sort every frame
-        info!("Sorting tiles and objects by depth...");
+        // info!("Sorting tiles and objects by depth...");
         map_data.tiles.sort_by_key(|tile| tile.z_m);
         map_data.objects.sort_by_key(|obj| obj.z);
-        info!("Sorted {} tiles and {} objects", map_data.tiles.len(), map_data.objects.len());
+        // info!("Sorted {} tiles and {} objects", map_data.tiles.len(), map_data.objects.len());
 
         Ok(map_data)
     }
@@ -468,7 +468,7 @@ impl MapLoader {
             map_data.portals.push(portal);
         }
 
-        info!("Portal parsing complete. Total portals: {}", map_data.portals.len());
+        // info!("Portal parsing complete. Total portals: {}", map_data.portals.len());
         let portals_with_textures = map_data.portals.iter().filter(|p| !p.textures.is_empty()).count();
         info!("  Portals with textures: {}", portals_with_textures);
         info!("  Portals without textures: {}", map_data.portals.len() - portals_with_textures);
@@ -593,9 +593,9 @@ impl MapLoader {
         }
 
         // THIRD PASS: Load NPC/Mob names and textures, create life entries
-        info!("Loading {} life entries...", life_data.len());
+        // info!("Loading {} life entries...", life_data.len());
         for life_entry in life_data {
-            info!("  Life: id='{}', type='{}', pos=({},{})", life_entry.id, life_entry.life_type, life_entry.x, life_entry.y);
+            // info!("  Life: id='{}', type='{}', pos=({},{})", life_entry.id, life_entry.life_type, life_entry.x, life_entry.y);
 
             // Load name and texture based on life type
             let (name, texture, origin_x, origin_y, mob_textures, mob_origins) = if life_entry.life_type == "n" && !life_entry.id.is_empty() {

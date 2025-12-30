@@ -50,25 +50,22 @@ impl AssetManager {
 
     pub async fn fetch_and_cache(url: &str, cache_path: &str) -> Result<Vec<u8>, String> {
         let idb_url = format!("idb://{}", cache_path);
-        // info!("Checking cache at: {}", idb_url);
+        // info!("fetch_and_cache() - checking cache: {}", cache_path);
 
         // Try loading from IndexedDB first
         if let Ok(bytes) = load_file(&idb_url).await {
             if bytes.len() > 0 {
-                // info!("Asset found in IndexedDB!");
+                // info!("Cache HIT for {}: {} bytes", cache_path, bytes.len());
                 return Ok(bytes);
             }
         }
 
-        // info!("Asset NOT found in DB. Fetching from URL: {}", url);
+        // info!("Cache MISS for {} - fetching from: {}", cache_path, url);
 
         // Fallback to HTTP
         match load_file(url).await {
             Ok(bytes) => {
-                info!(
-                    "Asset loaded from URL. Saving to IndexedDB at '{}'...",
-                    cache_path
-                );
+                // info!("HTTP fetch success: {} bytes. Saving to IndexedDB...", bytes.len());
                 #[cfg(target_arch = "wasm32")]
                 unsafe {
                     idb_save(
@@ -78,9 +75,13 @@ impl AssetManager {
                         bytes.len() as u32,
                     );
                 }
+                // info!("Saved to IndexedDB: {}", cache_path);
                 Ok(bytes)
             }
-            Err(e) => Err(format!("Failed to load asset: {:?}", e)),
+            Err(e) => {
+                error!("HTTP fetch FAILED for {}: {:?}", url, e);
+                Err(format!("Failed to load asset from {}: {:?}", url, e))
+            },
         }
     }
 

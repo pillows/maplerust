@@ -123,7 +123,7 @@ impl MobCache {
 
         // Check if we already have this WZ node cached
         let root_node = if let Some(cached_node) = self.wz_nodes.get(mob_id) {
-            info!("  Using cached WZ node for {}.img", mob_id);
+            // info!("  Using cached WZ node for {}.img", mob_id);
             cached_node.clone()
         } else {
             // Build URL for the Mob file

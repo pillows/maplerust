@@ -47,24 +47,23 @@ impl CursorManager {
 
     /// Load all cursor animations from WZ
     pub async fn load_cursors(&mut self) {
-        info!("Loading MapleStory cursors...");
-
         let url = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/UI/Basic.img";
         let cache_path = "/01/UI/Basic.img";
 
         match Self::load_cursor_from_wz(url, cache_path).await {
             Ok((default, npc_hover, dragging, right_click)) => {
+                // Verify all cursors have at least one frame
+                if default.is_empty() || npc_hover.is_empty() || dragging.is_empty() || right_click.is_empty() {
+                    error!("Cursor animations incomplete");
+                    self.loaded = false;
+                    return;
+                }
+
                 self.default_cursor = default;
                 self.npc_hover_cursor = npc_hover;
                 self.dragging_cursor = dragging;
                 self.right_click_cursor = right_click;
                 self.loaded = true;
-
-                info!("✓ Cursors loaded successfully:");
-                info!("  - Default cursor: {} frames", self.default_cursor.len());
-                info!("  - NPC hover cursor: {} frames", self.npc_hover_cursor.len());
-                info!("  - Dragging cursor: {} frames", self.dragging_cursor.len());
-                info!("  - Right-click cursor: {} frames", self.right_click_cursor.len());
             }
             Err(e) => {
                 error!("Failed to load cursors: {}", e);
@@ -210,6 +209,11 @@ impl CursorManager {
             CursorState::RightClick => self.right_click_cursor.len(),
         };
 
+        // Safety check: if frame_count is 0, don't update
+        if frame_count == 0 {
+            return;
+        }
+
         // Advance frame if needed
         if frame_count > 1 && self.frame_timer >= self.frame_duration {
             self.frame_timer = 0.0;
@@ -247,8 +251,15 @@ impl CursorManager {
             return;
         }
 
-        // Get current frame
-        let frame = &frames[self.current_frame % frames.len()];
+        // Safety check: ensure current_frame is within bounds
+        let frame_index = if self.current_frame < frames.len() {
+            self.current_frame
+        } else {
+            0
+        };
+
+        // Get current frame safely
+        let frame = &frames[frame_index];
 
         // Draw cursor at mouse position, offset by origin (hotspot)
         draw_texture(

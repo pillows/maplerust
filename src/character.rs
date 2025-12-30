@@ -64,7 +64,7 @@ impl CharacterData {
         Self {
             name,
             job,
-            level: 1,
+            level: 200,
             exp: 0,
             hp,
             mp,

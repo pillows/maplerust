@@ -84,11 +84,11 @@ impl ObjectCache {
         l1: &str,
         l2: &str,
     ) -> Result<(Texture2D, i32, i32), String> {
-        info!("Loading object: {}/{}/{}/{}", oS, l0, l1, l2);
+        // info!("Loading object: {}/{}/{}/{}", oS, l0, l1, l2);
 
         // Check if we already have this WZ node cached
         let root_node = if let Some(cached_node) = self.wz_nodes.get(oS) {
-            info!("  Using cached WZ node for {}.img", oS);
+            // info!("  Using cached WZ node for {}.img", oS);
             cached_node.clone()
         } else {
             // Build URL for the object file
@@ -103,7 +103,7 @@ impl ObjectCache {
                 .await
                 .map_err(|e| format!("Failed to fetch object: {}", e))?;
 
-            info!("  Parsing object file (size: {} bytes)...", bytes.len());
+            // info!("  Parsing object file (size: {} bytes)...", bytes.len());
 
             let wz_iv = guess_iv_from_wz_img(&bytes)
                 .ok_or_else(|| "Unable to guess version from object file".to_string())?;
@@ -120,7 +120,7 @@ impl ObjectCache {
                 .parse(&node)
                 .map_err(|e| format!("Failed to parse object WZ: {:?}", e))?;
 
-            info!("  Object WZ file parsed successfully");
+            // info!("  Object WZ file parsed successfully");
 
             // Cache the parsed node
             self.wz_nodes.insert(oS.to_string(), node.clone());
@@ -142,13 +142,13 @@ impl ObjectCache {
 
         // Try with /0 suffix first (most common case)
         let path_with_zero = format!("{}/0", base_path);
-        info!("Navigating to object path: {}", path_with_zero);
+        // info!("Navigating to object path: {}", path_with_zero);
 
         let obj_node = match root_node.read().unwrap().at_path_parsed(&path_with_zero) {
             Ok(node) => node,
             Err(_) => {
                 // Fallback: try without the /0 suffix
-                info!("Failed with /0, trying base path: {}", base_path);
+                // info!("Failed with /0, trying base path: {}", base_path);
                 root_node
                     .read()
                     .unwrap()
@@ -163,16 +163,16 @@ impl ObjectCache {
             let origin_read = origin_node.read().unwrap();
             match &origin_read.object_type {
                 WzObjectType::Value(wz_reader::property::WzValue::Vector(vec)) => {
-                    info!("  Found origin: ({}, {})", vec.0, vec.1);
+                    // info!("  Found origin: ({}, {})", vec.0, vec.1);
                     (vec.0, vec.1)
                 }
                 _ => {
-                    info!("  Origin found but not a Vector, using default (0, 0)");
+                    // info!("  Origin found but not a Vector, using default (0, 0)");
                     (0, 0)
                 }
             }
         } else {
-            info!("  No origin found, using default (0, 0)");
+            // info!("  No origin found, using default (0, 0)");
             (0, 0)
         };
 
@@ -193,10 +193,10 @@ impl ObjectCache {
                 let texture = Texture2D::from_rgba8(width, height, &bytes);
                 texture.set_filter(FilterMode::Linear);
 
-                info!(
-                    "Loaded object {}/{}/{}/{} ({}x{}) with origin ({}, {})",
-                    oS, l0, l1, l2, width, height, origin_x, origin_y
-                );
+                // info!(
+                //     "Loaded object {}/{}/{}/{} ({}x{}) with origin ({}, {})",
+                //     oS, l0, l1, l2, width, height, origin_x, origin_y
+                // );
 
                 Ok((texture, origin_x, origin_y))
             }
