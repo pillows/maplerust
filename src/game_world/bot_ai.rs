@@ -132,10 +132,12 @@ impl BotAI {
                 let fh_idx = rand::gen_range(0, map.footholds.len());
                 let fh = &map.footholds[fh_idx];
                 let spawn_x = rand::gen_range(fh.x1.min(fh.x2) as f32, fh.x1.max(fh.x2) as f32);
-                let spawn_y = map.get_foothold_y_at(fh, spawn_x) - 30.0;
+                // Player Y is at feet level (on the foothold)
+                let spawn_y = map.get_foothold_y_at(fh, spawn_x);
                 let level = rand::gen_range(10, 100);
                 
-                let fake_player = FakePlayer::new(fake_player_names[i], spawn_x, spawn_y, level);
+                let mut fake_player = FakePlayer::new(fake_player_names[i], spawn_x, spawn_y, level);
+                fake_player.on_ground = true;
                 self.fake_players.push(fake_player);
             }
         }
@@ -197,11 +199,11 @@ impl BotAI {
         player.vy += gravity * dt;
         player.y += player.vy * dt;
 
-        // Check collision with footholds
-        if let Some(fh) = map.find_foothold_at(player.x, player.y + 30.0) {
+        // Check collision with footholds (player.y is feet position)
+        if let Some(fh) = map.find_foothold_at(player.x, player.y) {
             let fh_y = map.get_foothold_y_at(fh, player.x);
-            if player.y + 30.0 >= fh_y && player.vy >= 0.0 {
-                player.y = fh_y - 30.0;
+            if player.y >= fh_y && player.vy >= 0.0 {
+                player.y = fh_y;
                 player.vy = 0.0;
                 player.on_ground = true;
             } else {
@@ -213,7 +215,7 @@ impl BotAI {
 
         // Clamp to map bounds
         player.x = player.x.max(map.info.vr_left as f32).min(map.info.vr_right as f32);
-        player.y = player.y.min(map.info.vr_bottom as f32 - 30.0);
+        player.y = player.y.min(map.info.vr_bottom as f32);
 
         // Update animation state
         if !player.on_ground {

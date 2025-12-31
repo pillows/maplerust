@@ -19,6 +19,7 @@ mod chat_balloon;
 mod game_menu;
 mod character_renderer;
 mod npc_dialog;
+mod social_windows;
 
 #[macroquad::main("RustMaple")]
 async fn main() {

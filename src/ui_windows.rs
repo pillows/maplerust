@@ -28,6 +28,10 @@ pub struct InventoryWindow {
     backgrnd: Option<TextureWithOrigin>,
     backgrnd2: Option<TextureWithOrigin>,
     backgrnd3: Option<TextureWithOrigin>,
+    // Tabs: 0=Equip, 1=Use, 2=Etc, 3=Setup, 4=Cash
+    tabs_enabled: [Option<TextureWithOrigin>; 5],
+    tabs_disabled: [Option<TextureWithOrigin>; 5],
+    selected_tab: usize,
     x: f32,
     y: f32,
     dragging: bool,
@@ -46,6 +50,9 @@ impl InventoryWindow {
             backgrnd: None,
             backgrnd2: None,
             backgrnd3: None,
+            tabs_enabled: [None, None, None, None, None],
+            tabs_disabled: [None, None, None, None, None],
+            selected_tab: 0,
             x: 100.0,
             y: 100.0,
             dragging: false,
@@ -62,6 +69,8 @@ impl InventoryWindow {
                 self.backgrnd = data.backgrnd;
                 self.backgrnd2 = data.backgrnd2;
                 self.backgrnd3 = data.backgrnd3;
+                self.tabs_enabled = data.tabs_enabled;
+                self.tabs_disabled = data.tabs_disabled;
                 self.loaded = true;
                 info!("Inventory window assets loaded successfully");
             }
@@ -145,6 +154,12 @@ impl InventoryWindow {
         data.backgrnd2 = Self::load_texture(&root_node, "Item/backgrnd2").await.ok();
         data.backgrnd3 = Self::load_texture(&root_node, "Item/backgrnd3").await.ok();
 
+        // Load tabs (0-4): enabled and disabled states
+        for i in 0..5 {
+            data.tabs_enabled[i] = Self::load_texture(&root_node, &format!("Item/Tab/enabled/{}", i)).await.ok();
+            data.tabs_disabled[i] = Self::load_texture(&root_node, &format!("Item/Tab/disabled/{}", i)).await.ok();
+        }
+
         Ok(data)
     }
 
@@ -190,11 +205,32 @@ impl InventoryWindow {
 
         let (mouse_x, mouse_y) = mouse_position();
 
-        // Handle dragging
+        // Handle tab clicks - simple fixed positions
         if is_mouse_button_pressed(MouseButton::Left) {
-            // Check if clicking on title bar area (top 30 pixels)
-            if mouse_y >= self.y && mouse_y <= self.y + 30.0 &&
-               mouse_x >= self.x && mouse_x <= self.x + 500.0 {
+            // Tabs are near the top of the window
+            let tab_y_start = self.y + 5.0;
+            let tab_y_end = self.y + 30.0;
+            
+            if mouse_y >= tab_y_start && mouse_y <= tab_y_end {
+                // 5 tabs, each about 30 pixels wide, starting at x + 7
+                let tab_start_x = self.x + 7.0;
+                let tab_width = 30.0;
+                
+                for i in 0..5 {
+                    let tab_x = tab_start_x + (i as f32 * tab_width);
+                    if mouse_x >= tab_x && mouse_x <= tab_x + tab_width {
+                        self.selected_tab = i;
+                        info!("Selected inventory tab {}", i);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Handle dragging - only on the right side of the title bar
+        if is_mouse_button_pressed(MouseButton::Left) {
+            if mouse_y >= self.y && mouse_y <= self.y + 20.0 &&
+               mouse_x >= self.x + 160.0 {
                 self.dragging = true;
                 self.drag_offset_x = mouse_x - self.x;
                 self.drag_offset_y = mouse_y - self.y;
@@ -234,6 +270,18 @@ impl InventoryWindow {
             draw_texture(&bg3.texture, self.x - bg3.origin.x, self.y - bg3.origin.y, WHITE);
         }
 
+        // Draw tabs - selected tab uses enabled texture, others use disabled
+        for i in 0..5 {
+            let tab = if i == self.selected_tab {
+                &self.tabs_enabled[i]
+            } else {
+                &self.tabs_disabled[i]
+            };
+            if let Some(t) = tab {
+                draw_texture(&t.texture, self.x - t.origin.x, self.y - t.origin.y, WHITE);
+            }
+        }
+
         // Draw item icons in a grid (4 columns, starting after some padding)
         let slot_size = 32.0;
         let slot_gap = 4.0;
@@ -250,7 +298,7 @@ impl InventoryWindow {
         }
 
         // Draw currency at bottom of window
-        let currency_y = self.y + 200.0; // Adjust based on window height
+        let currency_y = self.y + 200.0;
         draw_text("Mesos:", self.x + 10.0, currency_y, 12.0, WHITE);
         draw_text("1,234,567", self.x + 60.0, currency_y, 12.0, YELLOW);
     }
@@ -479,6 +527,8 @@ struct InventoryWindowData {
     backgrnd: Option<TextureWithOrigin>,
     backgrnd2: Option<TextureWithOrigin>,
     backgrnd3: Option<TextureWithOrigin>,
+    tabs_enabled: [Option<TextureWithOrigin>; 5],
+    tabs_disabled: [Option<TextureWithOrigin>; 5],
 }
 
 #[derive(Default)]

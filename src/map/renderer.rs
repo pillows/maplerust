@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 use crate::map::data::*;
 use crate::flags;
 use crate::game_world::bot_ai::BotAI;
+use crate::character_renderer::{CharacterRenderer, CharacterState};
 
 pub struct MapRenderer {
     debug_footholds: bool,
@@ -39,7 +40,7 @@ impl MapRenderer {
 
 
     /// Render the entire map at the given camera position
-    pub fn render(&self, map: &MapData, camera_x: f32, camera_y: f32, bot_ai: Option<&BotAI>) {
+    pub fn render(&self, map: &MapData, camera_x: f32, camera_y: f32, bot_ai: Option<&BotAI>, char_renderer: Option<&CharacterRenderer>) {
         // Draw backgrounds (layers behind player)
         self.render_backgrounds(map, camera_x, camera_y, false);
 
@@ -51,7 +52,7 @@ impl MapRenderer {
 
         // Draw fake players
         if let Some(bot_ai) = bot_ai {
-            self.render_fake_players(bot_ai, camera_x, camera_y);
+            self.render_fake_players(bot_ai, camera_x, camera_y, char_renderer);
         }
 
         // Draw footholds (platforms) for debugging
@@ -583,39 +584,62 @@ impl MapRenderer {
     }
 
     /// Render fake players
-    fn render_fake_players(&self, bot_ai: &BotAI, camera_x: f32, camera_y: f32) {
+    fn render_fake_players(&self, bot_ai: &BotAI, camera_x: f32, camera_y: f32, char_renderer: Option<&CharacterRenderer>) {
+        use crate::game_world::bot_ai::FakePlayerState;
+        
         for player in &bot_ai.fake_players {
             let screen_x = player.x - camera_x;
             let screen_y = player.y - camera_y;
 
-            // Draw player body (character-like shape)
-            let body_color = Color::from_rgba(80, 120, 200, 255);
-            let skin_color = Color::from_rgba(255, 220, 180, 255);
-            
-            // Body
-            draw_rectangle(screen_x - 10.0, screen_y - 35.0, 20.0, 30.0, body_color);
-            // Head
-            draw_rectangle(screen_x - 8.0, screen_y - 50.0, 16.0, 16.0, skin_color);
-            // Hair
-            draw_rectangle(screen_x - 9.0, screen_y - 55.0, 18.0, 8.0, Color::from_rgba(60, 40, 20, 255));
-            // Legs
-            draw_rectangle(screen_x - 8.0, screen_y - 5.0, 6.0, 10.0, body_color);
-            draw_rectangle(screen_x + 2.0, screen_y - 5.0, 6.0, 10.0, body_color);
+            // Use character renderer if available
+            if let Some(renderer) = char_renderer {
+                if renderer.is_loaded() {
+                    let state = match player.animation_state {
+                        FakePlayerState::Stand => CharacterState::Stand,
+                        FakePlayerState::Walk => CharacterState::Move,
+                        FakePlayerState::Jump => CharacterState::Jump,
+                    };
+                    // Create a temporary renderer copy with the fake player's facing direction
+                    let mut temp_renderer = renderer.clone();
+                    temp_renderer.update(0.0, state, player.facing_right);
+                    temp_renderer.draw(screen_x, screen_y, state);
+                } else {
+                    self.draw_fallback_player(screen_x, screen_y);
+                }
+            } else {
+                self.draw_fallback_player(screen_x, screen_y);
+            }
 
-            // Draw player name above
+            // Draw player name BELOW character (at feet level + offset)
             let name_width = measure_text(&player.name, None, 12, 1.0).width;
             let name_x = screen_x - name_width / 2.0;
-            let name_y = screen_y - 65.0;
+            let name_y = screen_y + 10.0;  // Below the character feet
             
             // Name background
             draw_rectangle(name_x - 2.0, name_y - 10.0, name_width + 4.0, 14.0, Color::from_rgba(0, 0, 0, 150));
             draw_text(&player.name, name_x, name_y, 12.0, WHITE);
             
-            // Draw level
+            // Draw level below name
             let level_text = format!("Lv.{}", player.level);
             let level_width = measure_text(&level_text, None, 10, 1.0).width;
-            draw_text(&level_text, screen_x - level_width / 2.0, name_y - 12.0, 10.0, YELLOW);
+            draw_text(&level_text, screen_x - level_width / 2.0, name_y + 12.0, 10.0, YELLOW);
         }
+    }
+
+    fn draw_fallback_player(&self, screen_x: f32, screen_y: f32) {
+        // Fallback: Draw simple rectangles
+        let body_color = Color::from_rgba(80, 120, 200, 255);
+        let skin_color = Color::from_rgba(255, 220, 180, 255);
+        
+        // Body (adjusted to match player position - feet at screen_y + 30)
+        draw_rectangle(screen_x - 10.0, screen_y - 20.0, 20.0, 30.0, body_color);
+        // Head
+        draw_rectangle(screen_x - 8.0, screen_y - 35.0, 16.0, 16.0, skin_color);
+        // Hair
+        draw_rectangle(screen_x - 9.0, screen_y - 40.0, 18.0, 8.0, Color::from_rgba(60, 40, 20, 255));
+        // Legs
+        draw_rectangle(screen_x - 8.0, screen_y + 10.0, 6.0, 20.0, body_color);
+        draw_rectangle(screen_x + 2.0, screen_y + 10.0, 6.0, 20.0, body_color);
     }
 
     /// Render portals

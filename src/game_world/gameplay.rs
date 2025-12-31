@@ -15,6 +15,7 @@ use crate::chat_balloon::ChatBalloonSystem;
 use crate::game_menu::{GameMenu, MenuAction};
 use crate::character_renderer::{CharacterRenderer, CharacterState};
 use crate::npc_dialog::NpcDialogSystem;
+use crate::social_windows::{ChannelWindow, MegaphoneWindow, MemoWindow, MessengerWindow};
 use futures;
 
 /// Gameplay state for when the player is in the game world
@@ -26,6 +27,7 @@ pub struct GameplayState {
     player_y: f32,
     player_vy: f32,  // Vertical velocity for gravity
     on_ground: bool,
+    facing_right: bool, // Track player facing direction
     loaded: bool,
     map_data: Option<MapData>,
     map_renderer: MapRenderer,
@@ -74,6 +76,11 @@ pub struct GameplayState {
     game_menu: GameMenu,
     character_renderer: CharacterRenderer,
     npc_dialog: NpcDialogSystem,
+    // Social windows
+    channel_window: ChannelWindow,
+    megaphone_window: MegaphoneWindow,
+    memo_window: MemoWindow,
+    messenger_window: MessengerWindow,
 }
 
 impl GameplayState {
@@ -88,6 +95,7 @@ impl GameplayState {
             player_y: 100.0,
             player_vy: 0.0,
             on_ground: false,
+            facing_right: true,
             loaded: false,
             map_data: None,
             map_renderer: MapRenderer::new(),
@@ -125,6 +133,10 @@ impl GameplayState {
             game_menu: GameMenu::new(),
             character_renderer: CharacterRenderer::new(),
             npc_dialog: NpcDialogSystem::new(),
+            channel_window: ChannelWindow::new(),
+            megaphone_window: MegaphoneWindow::new(),
+            memo_window: MemoWindow::new(),
+            messenger_window: MessengerWindow::new(),
         }
     }
 
@@ -146,12 +158,17 @@ impl GameplayState {
         let user_info_load = self.user_info_window.load_assets();
         let character_renderer_load = self.character_renderer.load_assets();
         let npc_dialog_load = self.npc_dialog.load_assets();
+        let channel_load = self.channel_window.load();
+        let megaphone_load = self.megaphone_window.load();
+        let memo_load = self.memo_window.load();
+        let messenger_load = self.messenger_window.load();
 
         // info!("Waiting for UI assets to load in parallel...");
         // Wait for all UI assets to load
         let _ = futures::join!(font_load, cursor_load, status_bar_load, minimap_load, 
                                cash_shop_load, key_config_load, chat_balloon_load, game_menu_load,
-                               inventory_load, equip_load, user_info_load, character_renderer_load, npc_dialog_load);
+                               inventory_load, equip_load, user_info_load, character_renderer_load, npc_dialog_load,
+                               channel_load, megaphone_load, memo_load, messenger_load);
 
         // info!("UI assets loaded. Font: ok, Cursors: {}, StatusBar: {}",
         //       self.cursor_manager.is_loaded(),
@@ -220,7 +237,7 @@ impl GameplayState {
                 // Don't clamp spawn position - use the actual portal/spawn location
                 if let Some((foothold_y, _fh)) = map.find_foothold_below(spawn_x, spawn_y) {
                     self.player_x = spawn_x;
-                    self.player_y = foothold_y - 30.0; // Subtract player height offset
+                    self.player_y = foothold_y; // Player Y is at feet level (foothold)
                     self.player_vy = 0.0;
                     self.on_ground = true;
                 } else {
@@ -529,86 +546,32 @@ impl GameplayState {
         // Only allow player movement when chat is not focused, menu is not open, and NPC dialog is not open
         let can_move = !self.status_bar.is_chat_focused() && !self.game_menu.is_visible() && !self.npc_dialog.is_visible();
 
+        // Debug: Log movement blockers
+        if !can_move {
+            // Draw debug info on screen
+        }
+
         if can_move {
-            // Horizontal movement - enforce VRLeft/VRRight boundaries and invisible walls
-            let vr_left = map.info.vr_left as f32;
-            let vr_right = map.info.vr_right as f32;
+            // Horizontal movement - use foothold extent for boundaries, not VR bounds
+            // VR bounds are for camera, footholds define walkable area
             
             // Check for invisible walls (platforms at different elevations blocking movement)
             let mut can_move_left = true;
             let mut can_move_right = true;
             
-            if flags::ENABLE_COLLISION {
-                // Find current foothold player is on
-                let current_fh = map.find_foothold_at(self.player_x, self.player_y + 30.0);
-                let current_fh_y = current_fh.map(|fh| {
-                    let dx = fh.x2 - fh.x1;
-                    let dy = fh.y2 - fh.y1;
-                    let ix = self.player_x as i32;
-                    if dx != 0 {
-                        (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-                    } else {
-                        fh.y1 as f32
-                    }
-                });
-                
-                // Check if moving left would hit a wall (platform at different elevation)
-                if let Some(current_y) = current_fh_y {
-                    let test_x = self.player_x - move_speed * clamped_dt;
-                    // Check all footholds at the test X position
-                    for fh in &map.footholds {
-                        let min_x = fh.x1.min(fh.x2) as f32;
-                        let max_x = fh.x1.max(fh.x2) as f32;
-                        if test_x >= min_x && test_x <= max_x {
-                            let dx = fh.x2 - fh.x1;
-                            let dy = fh.y2 - fh.y1;
-                            let ix = test_x as i32;
-                            let fh_y = if dx != 0 {
-                                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-                            } else {
-                                fh.y1 as f32
-                            };
-                            // If this foothold is significantly higher (more than 50px), it's a wall
-                            if fh_y < current_y - 50.0 {
-                                can_move_left = false;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Check if moving right would hit a wall
-                    let test_x = self.player_x + move_speed * clamped_dt;
-                    for fh in &map.footholds {
-                        let min_x = fh.x1.min(fh.x2) as f32;
-                        let max_x = fh.x1.max(fh.x2) as f32;
-                        if test_x >= min_x && test_x <= max_x {
-                            let dx = fh.x2 - fh.x1;
-                            let dy = fh.y2 - fh.y1;
-                            let ix = test_x as i32;
-                            let fh_y = if dx != 0 {
-                                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-                            } else {
-                                fh.y1 as f32
-                            };
-                            // If this foothold is significantly higher (more than 50px), it's a wall
-                            if fh_y < current_y - 50.0 {
-                                can_move_right = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            // Wall detection only when on ground and collision enabled
+            // Disabled for now as it causes issues - proper wall detection needs
+            // to check for actual wall tiles, not just foothold elevation differences
             
             if (is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)) && can_move_left {
                 let new_x = self.player_x - move_speed * clamped_dt;
-                // Enforce left boundary - player cannot go past VRLeft
-                self.player_x = new_x.max(vr_left);
+                // Enforce left boundary - use foothold extent
+                self.player_x = new_x.max(self.foothold_min_x);
             }
             if (is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)) && can_move_right {
                 let new_x = self.player_x + move_speed * clamped_dt;
-                // Enforce right boundary - player cannot go past VRRight
-                self.player_x = new_x.min(vr_right);
+                // Enforce right boundary - use foothold extent
+                self.player_x = new_x.min(self.foothold_max_x);
             }
 
             // Free-roam vertical movement (Space + Up/Down or W/S)
@@ -628,9 +591,11 @@ impl GameplayState {
             let player_screen_x = self.player_x - self.camera_x;
             let player_screen_y = self.player_y - self.camera_y;
             
-            // Check if click is on the player character
-            if mouse_x >= player_screen_x - 15.0 && mouse_x <= player_screen_x + 15.0 &&
-               mouse_y >= player_screen_y - 30.0 && mouse_y <= player_screen_y + 30.0 {
+            // Check if click is on the player character (hitbox around feet position)
+            let player_half_width = 20.0;
+            let player_height = 50.0;
+            if mouse_x >= player_screen_x - player_half_width && mouse_x <= player_screen_x + player_half_width &&
+               mouse_y >= player_screen_y - player_height && mouse_y <= player_screen_y + 10.0 {
                 
                 let current_time = get_time() as f32;
                 let double_click_threshold = 0.5; // 500ms
@@ -871,8 +836,8 @@ impl GameplayState {
 
                 if alt_pressed && down_pressed && self.on_ground {
                     // Check if there's a platform below before allowing drop-through
-                    // Find current foothold
-                    if let Some(current_fh) = map.find_foothold_at(self.player_x, self.player_y + 30.0) {
+                    // Find current foothold (player_y is at feet/foothold level)
+                    if let Some(current_fh) = map.find_foothold_at(self.player_x, self.player_y) {
                         let current_fh_y = {
                             let dx = current_fh.x2 - current_fh.x1;
                             let dy = current_fh.y2 - current_fh.y1;
@@ -913,8 +878,8 @@ impl GameplayState {
             if flags::ENABLE_COLLISION {
                 // Skip foothold collision when dropping through platform
                 if !self.drop_through_platform {
-                    // Try to find foothold at current position
-                    if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y + 30.0) {
+                    // Try to find foothold at current position (player_y is feet position)
+                    if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y) {
                         // Calculate Y on the foothold
                         let dx = fh.x2 - fh.x1;
                         let dy = fh.y2 - fh.y1;
@@ -927,8 +892,8 @@ impl GameplayState {
                         };
 
                         // Snap player to foothold if falling through it
-                        if self.player_y + 30.0 >= fh_y && self.player_vy >= 0.0 {
-                            self.player_y = fh_y - 30.0;
+                        if self.player_y >= fh_y && self.player_vy >= 0.0 {
+                            self.player_y = fh_y;
                             self.player_vy = 0.0;
                             self.on_ground = true;
                         } else {
@@ -941,7 +906,7 @@ impl GameplayState {
                     // While dropping through, keep falling
                     self.on_ground = false;
 
-                    // Reset drop_through flag after falling a bit (30 pixels)
+                    // Reset drop_through flag after falling a bit
                     // This allows collision with platforms below the original one
                     if self.player_vy > 100.0 {
                         self.drop_through_platform = false;
@@ -1070,6 +1035,9 @@ impl GameplayState {
             self.chat_balloon.show_player_chat(&message, self.player_x, self.player_y);
         }
 
+        // Update chat balloon player position
+        self.chat_balloon.update_player_position(self.player_x, self.player_y);
+
         // Update minimap
         self.minimap.update();
 
@@ -1084,6 +1052,12 @@ impl GameplayState {
         self.chat_balloon.update(clamped_dt);
         self.game_menu.update();
         self.npc_dialog.update();
+        
+        // Update social windows
+        self.channel_window.update();
+        self.megaphone_window.update();
+        self.memo_window.update();
+        self.messenger_window.update();
 
         // Update character renderer
         let character_state = if self.on_ladder {
@@ -1101,19 +1075,53 @@ impl GameplayState {
             }
         };
         
-        let facing_right = !(is_key_down(KeyCode::Left) || is_key_down(KeyCode::A));
-        self.character_renderer.update(clamped_dt, character_state, facing_right);
+        // Update facing direction only when actively pressing a direction key
+        if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+            self.facing_right = false;
+        } else if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
+            self.facing_right = true;
+        }
+        self.character_renderer.update(clamped_dt, character_state, self.facing_right);
 
         // Handle game menu actions
         match self.game_menu.take_action() {
             MenuAction::Inventory => self.inventory_window.toggle(),
             MenuAction::Equip => self.equip_window.toggle(),
             MenuAction::KeyConfig => self.key_config.toggle(),
+            MenuAction::Channel => self.channel_window.toggle(),
+            MenuAction::Messenger => self.messenger_window.toggle(),
             MenuAction::Quit => {
                 // TODO: Implement quit confirmation
                 info!("Quit requested from menu");
             }
             _ => {}
+        }
+
+        // ESC key - close active UI windows (priority order)
+        if is_key_pressed(KeyCode::Escape) {
+            if self.cash_shop.is_visible() {
+                self.cash_shop.hide();
+            } else if self.npc_dialog.is_visible() {
+                self.npc_dialog.close_dialog();
+            } else if self.game_menu.is_visible() {
+                self.game_menu.hide();
+            } else if self.megaphone_window.is_visible() {
+                self.megaphone_window.hide();
+            } else if self.channel_window.is_visible() {
+                self.channel_window.hide();
+            } else if self.messenger_window.is_visible() {
+                self.messenger_window.hide();
+            } else if self.memo_window.is_visible() {
+                self.memo_window.hide();
+            } else if self.inventory_window.visible {
+                self.inventory_window.visible = false;
+            } else if self.equip_window.visible {
+                self.equip_window.visible = false;
+            } else if self.key_config.is_visible() {
+                self.key_config.hide();
+            } else if self.user_info_window.visible {
+                self.user_info_window.visible = false;
+            }
         }
 
         // Handle keyboard shortcuts for UI windows (only when chat is not focused and cash shop is not open)
@@ -1130,6 +1138,14 @@ impl GameplayState {
             if is_key_pressed(KeyCode::K) {
                 self.key_config.toggle();
             }
+            // O key - toggle messenger
+            if is_key_pressed(KeyCode::O) {
+                self.messenger_window.toggle();
+            }
+            // T key - toggle megaphone
+            if is_key_pressed(KeyCode::T) {
+                self.megaphone_window.toggle();
+            }
         }
 
         // Handle status bar button clicks
@@ -1140,7 +1156,12 @@ impl GameplayState {
             self.key_config.toggle();
         }
         if self.status_bar.bt_menu_clicked() {
-            self.game_menu.toggle();
+            // Get menu button position and show menu above it
+            let (btn_x, btn_y) = self.status_bar.get_menu_button_pos();
+            self.game_menu.toggle_at(btn_x + 10.0, btn_y);
+        }
+        if self.status_bar.bt_channel_clicked() {
+            self.channel_window.toggle();
         }
     }
 
@@ -1164,7 +1185,7 @@ impl GameplayState {
 
         if let Some(ref map) = self.map_data {
             // Render map backgrounds (behind player)
-            self.map_renderer.render(map, self.camera_x, self.camera_y, Some(&self.bot_ai));
+            self.map_renderer.render(map, self.camera_x, self.camera_y, Some(&self.bot_ai), Some(&self.character_renderer));
 
             // Draw player using character renderer
             let player_screen_x = self.player_x - self.camera_x;
@@ -1262,9 +1283,20 @@ impl GameplayState {
         // Draw new UI windows
         self.key_config.draw();
         self.game_menu.draw();
+        
+        // Draw social windows
+        self.channel_window.draw();
+        self.megaphone_window.draw();
+        self.memo_window.draw();
+        self.messenger_window.draw();
 
         // Draw CashShop (full screen overlay, drawn on top of everything except cursor)
         self.cash_shop.draw();
+
+        // Always show player coordinates at top-left for debugging
+        let coords_text = format!("X: {:.0}  Y: {:.0}  Ground: {}", self.player_x, self.player_y, self.on_ground);
+        draw_rectangle(5.0, 5.0, 200.0, 20.0, Color::from_rgba(0, 0, 0, 180));
+        draw_text(&coords_text, 10.0, 20.0, 14.0, YELLOW);
 
         // Draw custom MapleStory cursor (drawn last so it's on top)
         self.cursor_manager.draw();
@@ -1340,13 +1372,47 @@ impl GameplayState {
             draw_text(&pos_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
             y_offset += line_height;
 
+            let ground_text = format!("On Ground: {} | VY: {:.1}", self.on_ground, self.player_vy);
+            draw_text(&ground_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
+            y_offset += line_height;
+
+            // Show current foothold info
+            if let Some(ref map) = self.map_data {
+                if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y) {
+                    let fh_y = map.get_foothold_y_at(fh, self.player_x);
+                    let fh_text = format!("FH: id={} y={:.0}", fh.id, fh_y);
+                    draw_text(&fh_text, panel_x + 10.0, y_offset, 14.0, GREEN);
+                } else {
+                    draw_text("FH: None", panel_x + 10.0, y_offset, 14.0, RED);
+                }
+                y_offset += line_height;
+            }
+
             let cam_text = format!("Cam: ({:.0}, {:.0})", self.camera_x, self.camera_y);
             draw_text(&cam_text, panel_x + 10.0, y_offset, 14.0, YELLOW);
             y_offset += line_height;
 
+            // Show VR bounds
+            if let Some(ref map) = self.map_data {
+                let vr_text = format!("VR: L={} R={}", map.info.vr_left, map.info.vr_right);
+                draw_text(&vr_text, panel_x + 10.0, y_offset, 14.0, GRAY);
+                y_offset += line_height;
+            }
+
             if flags::GOD_MODE {
                 draw_text("GOD MODE", panel_x + 10.0, y_offset, 14.0, RED);
+                y_offset += line_height;
             }
+
+            // Movement debug
+            let chat_focused = self.status_bar.is_chat_focused();
+            let menu_visible = self.game_menu.is_visible();
+            let npc_visible = self.npc_dialog.is_visible();
+            let can_move = !chat_focused && !menu_visible && !npc_visible;
+            let move_color = if can_move { GREEN } else { RED };
+            let move_text = format!("Move: {} (chat:{} menu:{} npc:{})", 
+                can_move, chat_focused, menu_visible, npc_visible);
+            draw_text(&move_text, panel_x + 10.0, y_offset, 14.0, move_color);
         }
 
         // Show hitboxes if enabled

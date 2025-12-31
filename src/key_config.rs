@@ -104,6 +104,8 @@ pub struct KeyConfig {
     cancel_button: KeyConfigButton,
     default_button: KeyConfigButton,
     ok_button: KeyConfigButton,
+    // Icons for key bindings
+    icons: std::collections::HashMap<i32, Texture2D>,
     // Window position
     x: f32,
     y: f32,
@@ -125,6 +127,7 @@ impl KeyConfig {
             cancel_button: KeyConfigButton::new(),
             default_button: KeyConfigButton::new(),
             ok_button: KeyConfigButton::new(),
+            icons: std::collections::HashMap::new(),
             x: 100.0,
             y: 100.0,
             width: 632.0,
@@ -139,7 +142,7 @@ impl KeyConfig {
         info!("Loading KeyConfig assets...");
         
         match Self::load_from_wz().await {
-            Ok((bg, bg2, bg3, cancel, default_btn, ok_btn)) => {
+            Ok((bg, bg2, bg3, cancel, default_btn, ok_btn, icons)) => {
                 if let Some(ref b) = bg {
                     self.width = b.texture.width();
                     self.height = b.texture.height();
@@ -150,11 +153,12 @@ impl KeyConfig {
                 self.cancel_button = cancel;
                 self.default_button = default_btn;
                 self.ok_button = ok_btn;
+                self.icons = icons;
                 self.loaded = true;
                 // Center window
                 self.x = (screen_width() - self.width) / 2.0;
                 self.y = (screen_height() - self.height) / 2.0;
-                info!("KeyConfig assets loaded successfully");
+                info!("KeyConfig assets loaded successfully with {} icons", self.icons.len());
             }
             Err(e) => {
                 error!("Failed to load KeyConfig assets: {}", e);
@@ -162,7 +166,7 @@ impl KeyConfig {
         }
     }
 
-    async fn load_from_wz() -> Result<(Option<TextureWithOrigin>, Option<TextureWithOrigin>, Option<TextureWithOrigin>, KeyConfigButton, KeyConfigButton, KeyConfigButton), String> {
+    async fn load_from_wz() -> Result<(Option<TextureWithOrigin>, Option<TextureWithOrigin>, Option<TextureWithOrigin>, KeyConfigButton, KeyConfigButton, KeyConfigButton, std::collections::HashMap<i32, Texture2D>), String> {
         let bytes = AssetManager::fetch_and_cache(UIWINDOW2_URL, UIWINDOW2_CACHE).await
             .map_err(|e| format!("Failed to fetch UIWindow2.img: {}", e))?;
 
@@ -188,7 +192,19 @@ impl KeyConfig {
         let default_btn = Self::load_button(&root_node, "KeyConfig/BtDefault").await;
         let ok_btn = Self::load_button(&root_node, "KeyConfig/BtOK").await;
 
-        Ok((bg, bg2, bg3, cancel, default_btn, ok_btn))
+        // Load icons
+        let mut icons = std::collections::HashMap::new();
+        let icon_ids = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 
+                        20, 21, 23, 24, 25, 26, 27, 28, 29, 50, 51, 52, 53, 54, 
+                        100, 101, 102, 103, 104, 105, 106];
+        for id in icon_ids {
+            let path = format!("KeyConfig/icon/{}", id);
+            if let Ok(tex) = Self::load_texture(&root_node, &path).await {
+                icons.insert(id, tex.texture);
+            }
+        }
+
+        Ok((bg, bg2, bg3, cancel, default_btn, ok_btn, icons))
     }
 
     async fn load_texture(root_node: &WzNodeArc, path: &str) -> Result<TextureWithOrigin, String> {

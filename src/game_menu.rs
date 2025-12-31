@@ -129,6 +129,8 @@ pub enum MenuAction {
     SystemOption,
     GameOption,
     Quit,
+    Channel,
+    Messenger,
 }
 
 /// GameMenu window - main game menu
@@ -352,8 +354,13 @@ impl GameMenu {
         if self.visible {
             self.hide();
         } else {
-            // Show above the button
-            self.show(button_x - self.width / 2.0, button_y - self.height);
+            // Show above the button - position menu so bottom aligns with button top
+            let menu_x = button_x - self.width / 2.0;
+            let menu_y = button_y - self.height - 5.0; // 5px gap above button
+            // Clamp to screen bounds
+            let clamped_x = menu_x.max(0.0).min(screen_width() - self.width);
+            let clamped_y = menu_y.max(0.0);
+            self.show(clamped_x, clamped_y);
         }
     }
 

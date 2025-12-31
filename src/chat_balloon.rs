@@ -49,6 +49,8 @@ pub struct ActiveBalloon {
     pub text: String,
     pub x: f32,
     pub y: f32,
+    pub offset_y: f32,  // Offset from anchor point (for following)
+    pub follows_player: bool,
     pub lifetime: f32,
     pub max_lifetime: f32,
     pub balloon_type: usize,
@@ -206,6 +208,8 @@ impl ChatBalloonSystem {
             text: text.to_string(),
             x,
             y,
+            offset_y: 0.0,
+            follows_player: false,
             lifetime,
             max_lifetime: lifetime,
             balloon_type,
@@ -218,10 +222,31 @@ impl ChatBalloonSystem {
         self.show_balloon(text, npc_x, npc_y - 80.0, 100, 5.0);
     }
 
-    /// Show player chat balloon above player
+    /// Show player chat balloon above player (follows player)
     pub fn show_player_chat(&mut self, text: &str, player_x: f32, player_y: f32) {
-        // Position balloon above player, use default balloon type (0)
-        self.show_balloon(text, player_x, player_y - 50.0, 0, 4.0);
+        // Remove any existing player balloons
+        self.active_balloons.retain(|b| !b.follows_player);
+        
+        self.active_balloons.push(ActiveBalloon {
+            text: text.to_string(),
+            x: player_x,
+            y: player_y,
+            offset_y: -70.0,  // Above player head
+            follows_player: true,
+            lifetime: 4.0,
+            max_lifetime: 4.0,
+            balloon_type: 0,
+        });
+    }
+
+    /// Update player balloon position
+    pub fn update_player_position(&mut self, player_x: f32, player_y: f32) {
+        for balloon in &mut self.active_balloons {
+            if balloon.follows_player {
+                balloon.x = player_x;
+                balloon.y = player_y;
+            }
+        }
     }
 
     /// Update balloons (decrease lifetime, remove expired)
@@ -244,7 +269,7 @@ impl ChatBalloonSystem {
 
     fn draw_balloon(&self, balloon: &ActiveBalloon, camera_x: f32, camera_y: f32) {
         let screen_x = balloon.x - camera_x;
-        let screen_y = balloon.y - camera_y;
+        let screen_y = balloon.y + balloon.offset_y - camera_y;
 
         // Calculate text dimensions
         let font_size = 12.0;

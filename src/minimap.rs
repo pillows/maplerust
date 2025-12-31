@@ -378,13 +378,13 @@ impl MiniMap {
         draw_rectangle(x, y, width, bar_height, Color::from_rgba(0, 0, 0, 200));
         draw_rectangle_lines(x, y, width, bar_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw map name with larger font
+        // Draw map name with larger font in YELLOW
         let map_name = if !map.info.map_name.is_empty() {
             &map.info.map_name
         } else {
             "Unknown"
         };
-        draw_text(map_name, x + 8.0, y + 16.0, 14.0, WHITE);
+        draw_text(map_name, x + 8.0, y + 16.0, 16.0, YELLOW);
 
         // Draw buttons
         self.bt_min.draw();
@@ -401,14 +401,14 @@ impl MiniMap {
         draw_rectangle(x, y, width, title_height, Color::from_rgba(40, 40, 60, 230));
         draw_line(x, y + title_height, x + width, y + title_height, 1.0, Color::from_rgba(100, 100, 100, 200));
 
-        // Draw map name at top with larger font
+        // Draw map name at top with larger font in YELLOW
         let map_name = if !map.info.map_name.is_empty() {
             &map.info.map_name
         } else {
             "Unknown"
         };
-        let font_size = if self.mode == MiniMapMode::Max { 16.0 } else { 14.0 };
-        draw_text(map_name, x + 8.0, y + 20.0, font_size, WHITE);
+        let font_size = if self.mode == MiniMapMode::Max { 18.0 } else { 16.0 };
+        draw_text(map_name, x + 8.0, y + 22.0, font_size, YELLOW);
 
         // Draw map content area (below title bar)
         let content_x = x + 5.0;

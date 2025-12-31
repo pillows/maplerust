@@ -121,6 +121,15 @@ impl Button {
             );
         }
     }
+
+    /// Get the screen position of the button (top-left corner)
+    fn get_screen_pos(&self) -> (f32, f32) {
+        if let Some(tex) = &self.normal {
+            (self.x - tex.origin.x, self.y - tex.origin.y)
+        } else {
+            (self.x, self.y)
+        }
+    }
 }
 
 impl Default for Button {
@@ -1375,18 +1384,19 @@ impl StatusBarUI {
     fn draw_chat_input(&self, text_x: f32, text_y: f32, has_chat_enter: bool) {
         let font_size = 12.0;
 
+        // Draw a background for the input area to ensure visibility
+        if self.chat_focused {
+            draw_rectangle(text_x - 2.0, text_y - 12.0, 400.0, 16.0, Color::from_rgba(255, 255, 255, 200));
+        }
+
         // Draw chat target prefix (e.g., "[party]", "[all]")
         let target_prefix = format!("[{}] ", self.current_chat_target);
-        let prefix_color = if has_chat_enter {
-            Color::from_rgba(255, 255, 100, 255)  // Brighter when chatEnter is shown
-        } else {
-            Color::from_rgba(200, 200, 100, 255)
-        };
+        let prefix_color = Color::from_rgba(100, 100, 50, 255);  // Dark yellow/olive
         draw_text(&target_prefix, text_x, text_y, font_size, prefix_color);
         let prefix_width = measure_text(&target_prefix, None, font_size as u16, 1.0).width;
 
-        // Draw input text - use dark gray color for visibility on white background
-        let text_color = Color::from_rgba(40, 40, 40, 255);  // Dark gray for readability
+        // Draw input text - BLACK for visibility
+        let text_color = BLACK;
         
         // Draw text before cursor
         let text_before_cursor = &self.chat_state.input_buffer[..self.chat_state.cursor_position.min(self.chat_state.input_buffer.len())];
@@ -1399,6 +1409,11 @@ impl StatusBarUI {
         // Draw blinking caret at cursor position (only when focused)
         if self.chat_focused && self.caret_visible {
             draw_text("|", text_x + prefix_width + before_width, text_y, font_size, text_color);
+        }
+        
+        // Debug: show chat state
+        if self.chat_focused {
+            draw_text("(Chat Active - ESC to cancel)", text_x, text_y + 14.0, 10.0, RED);
         }
     }
 
@@ -1415,8 +1430,9 @@ impl StatusBarUI {
 
         for i in start_idx..end_idx {
             if let Some(msg) = self.chat_state.messages.get(i) {
-                // Only display the message text, without chat type or sender name
-                draw_text(&msg.text, text_x, text_y, font_size, WHITE);
+                // Draw message with dark gray text for visibility
+                let text_color = Color::from_rgba(50, 50, 50, 255);  // Dark gray
+                draw_text(&msg.text, text_x, text_y, font_size, text_color);
                 text_y += line_height;
             }
         }
@@ -1445,6 +1461,16 @@ impl StatusBarUI {
     /// Check if menu button was clicked
     pub fn bt_menu_clicked(&self) -> bool {
         self.bt_menu.is_clicked()
+    }
+
+    /// Check if channel button was clicked
+    pub fn bt_channel_clicked(&self) -> bool {
+        self.bt_channel.is_clicked()
+    }
+
+    /// Get menu button screen position for positioning the menu above it
+    pub fn get_menu_button_pos(&self) -> (f32, f32) {
+        self.bt_menu.get_screen_pos()
     }
 
     /// Get and clear the last sent chat message (for balloon display)

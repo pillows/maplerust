@@ -23,6 +23,7 @@ struct CharacterFrame {
     delay: u32,
 }
 
+#[derive(Clone)]
 struct CharacterAnimation {
     frames: Vec<CharacterFrame>,
     current_frame: usize,
@@ -49,6 +50,7 @@ impl CharacterAnimation {
     }
 }
 
+#[derive(Clone)]
 pub struct CharacterRenderer {
     loaded: bool,
     animations: HashMap<String, CharacterAnimation>,
@@ -163,6 +165,8 @@ impl CharacterRenderer {
                     o.read().unwrap().try_as_vector2d().map(|v| Vec2::new(v.0 as f32, v.1 as f32))
                 }).unwrap_or(Vec2::ZERO);
 
+                info!("Frame {} body origin: ({}, {}), tex size: {}x{}", frame_num, origin.x, origin.y, tex.width(), tex.height());
+
                 // Get neck position from body/map/neck
                 let neck = br.at_path("map/neck").and_then(|n| {
                     n.read().unwrap().try_as_vector2d().map(|v| Vec2::new(v.0 as f32, v.1 as f32))
@@ -242,18 +246,27 @@ impl CharacterRenderer {
         if self.loaded {
             if let Some(anim) = self.animations.get(anim_name) {
                 if let Some(frame) = anim.get_current_frame() {
-                    let flip = !self.facing_right;
+                    // MapleStory sprites face LEFT by default, so flip when facing right
+                    let flip = self.facing_right;
                     
-                    // Draw body
-                    let body_x = x - frame.body_origin.x;
+                    // Draw body - when flipping, need to adjust X origin
+                    let body_x = if flip {
+                        x - (frame.body_texture.width() - frame.body_origin.x)
+                    } else {
+                        x - frame.body_origin.x
+                    };
                     let body_y = y - frame.body_origin.y;
                     draw_texture_ex(&frame.body_texture, body_x, body_y, WHITE, DrawTextureParams {
                         flip_x: flip, ..Default::default()
                     });
 
-                    // Draw head
+                    // Draw head - when flipping, need to adjust X origin
                     if let Some(ref head_tex) = frame.head_texture {
-                        let head_x = x - frame.head_origin.x + frame.head_offset.x;
+                        let head_x = if flip {
+                            x - (head_tex.width() - frame.head_origin.x) - frame.head_offset.x
+                        } else {
+                            x - frame.head_origin.x + frame.head_offset.x
+                        };
                         let head_y = y - frame.head_origin.y + frame.head_offset.y;
                         draw_texture_ex(head_tex, head_x, head_y, WHITE, DrawTextureParams {
                             flip_x: flip, ..Default::default()
