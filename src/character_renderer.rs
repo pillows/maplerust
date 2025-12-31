@@ -281,8 +281,65 @@ impl CharacterRenderer {
         draw_rectangle(x - 15.0, y - 50.0, 30.0, 50.0, BLUE);
     }
 
+    /// Draw with a specific timer value (for fake players)
+    pub fn draw_with_timer(&self, x: f32, y: f32, state: CharacterState, facing_right: bool, timer: f32) {
+        let anim_name = match state {
+            CharacterState::Stand => "stand",
+            CharacterState::Move => "move",
+            CharacterState::Jump | CharacterState::Fall => "jump",
+        };
+
+        if self.loaded {
+            if let Some(anim) = self.animations.get(anim_name) {
+                if !anim.frames.is_empty() {
+                    // Calculate frame index from timer
+                    let total_delay: f32 = anim.frames.iter().map(|f| f.delay as f32).sum();
+                    let time_ms = (timer * 1000.0) % total_delay.max(1.0);
+                    let mut accumulated = 0.0;
+                    let mut frame_idx = 0;
+                    for (i, frame) in anim.frames.iter().enumerate() {
+                        accumulated += frame.delay as f32;
+                        if time_ms < accumulated {
+                            frame_idx = i;
+                            break;
+                        }
+                    }
+                    
+                    if let Some(frame) = anim.frames.get(frame_idx) {
+                        let flip = facing_right;
+                        let body_x = if flip {
+                            x - (frame.body_texture.width() - frame.body_origin.x)
+                        } else {
+                            x - frame.body_origin.x
+                        };
+                        let body_y = y - frame.body_origin.y;
+                        draw_texture_ex(&frame.body_texture, body_x, body_y, WHITE, DrawTextureParams {
+                            flip_x: flip, ..Default::default()
+                        });
+
+                        if let Some(ref head_tex) = frame.head_texture {
+                            let head_x = if flip {
+                                x - (head_tex.width() - frame.head_origin.x) - frame.head_offset.x
+                            } else {
+                                x - frame.head_origin.x + frame.head_offset.x
+                            };
+                            let head_y = y - frame.head_origin.y + frame.head_offset.y;
+                            draw_texture_ex(head_tex, head_x, head_y, WHITE, DrawTextureParams {
+                                flip_x: flip, ..Default::default()
+                            });
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        // Fallback
+        draw_rectangle(x - 15.0, y - 50.0, 30.0, 50.0, BLUE);
+    }
+
     pub fn is_loaded(&self) -> bool { self.loaded }
 }
+
 
 impl Default for CharacterRenderer {
     fn default() -> Self { Self::new() }

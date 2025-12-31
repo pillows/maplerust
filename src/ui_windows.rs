@@ -469,56 +469,137 @@ impl EquipWindow {
 #[derive(Clone)]
 pub struct UserInfoWindow {
     pub visible: bool,
+    loaded: bool,
+    backgrnd: Option<TextureWithOrigin>,
+    backgrnd2: Option<TextureWithOrigin>,
+    backgrnd3: Option<TextureWithOrigin>,
     x: f32,
     y: f32,
+    width: f32,
+    height: f32,
+    dragging: bool,
+    drag_offset_x: f32,
+    drag_offset_y: f32,
 }
 
 impl UserInfoWindow {
     pub fn new() -> Self {
-        Self { visible: false, x: 200.0, y: 200.0 }
+        Self { 
+            visible: false, 
+            loaded: false,
+            backgrnd: None,
+            backgrnd2: None,
+            backgrnd3: None,
+            x: 200.0, 
+            y: 200.0,
+            width: 212.0,
+            height: 192.0,
+            dragging: false,
+            drag_offset_x: 0.0,
+            drag_offset_y: 0.0,
+        }
     }
 
     pub async fn load_assets(&mut self) {
-        // TODO: Load user info window assets
+        let bytes = match AssetManager::fetch_and_cache(UIWINDOW2_URL, UIWINDOW2_CACHE).await {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let wz_iv = match guess_iv_from_wz_img(&bytes) {
+            Some(iv) => iv,
+            None => return,
+        };
+        let byte_len = bytes.len();
+        let reader = Arc::new(WzReader::from_buff(&bytes).with_iv(wz_iv));
+        let cache_name_ref: wz_reader::WzNodeName = UIWINDOW2_CACHE.to_string().into();
+        let wz_image = WzImage::new(&cache_name_ref, 0, byte_len, &reader);
+        let root_node: WzNodeArc = WzNode::new(&UIWINDOW2_CACHE.to_string().into(), wz_image, None).into();
+        if root_node.write().unwrap().parse(&root_node).is_err() { return; }
+
+        self.backgrnd = Self::load_texture(&root_node, "UserInfo/character/backgrnd").await.ok();
+        self.backgrnd2 = Self::load_texture(&root_node, "UserInfo/character/backgrnd2").await.ok();
+        self.backgrnd3 = Self::load_texture(&root_node, "UserInfo/character/backgrnd3").await.ok();
+        
+        if let Some(ref bg) = self.backgrnd {
+            self.width = bg.texture.width();
+            self.height = bg.texture.height();
+        }
+        self.loaded = true;
+        info!("UserInfo window loaded");
+    }
+
+    async fn load_texture(root_node: &WzNodeArc, path: &str) -> Result<TextureWithOrigin, String> {
+        let node = root_node.read().unwrap()
+            .at_path_parsed(path)
+            .map_err(|e| format!("Path '{}' not found: {:?}", path, e))?;
+        node.write().unwrap().parse(&node)
+            .map_err(|e| format!("Failed to parse node at '{}': {:?}", path, e))?;
+        let node_read = node.read().unwrap();
+        let png = node_read.try_as_png()
+            .ok_or_else(|| format!("Node at '{}' is not a PNG", path))?;
+        let png_data = png.extract_png()
+            .map_err(|e| format!("Failed to extract PNG at '{}': {:?}", path, e))?;
+        let rgba_img = png_data.to_rgba8();
+        let texture = Texture2D::from_rgba8(rgba_img.width() as u16, rgba_img.height() as u16, &rgba_img.into_raw());
+        let origin = node_read.children.get("origin").and_then(|o| {
+            o.read().unwrap().try_as_vector2d().map(|v| Vec2::new(v.0 as f32, v.1 as f32))
+        }).unwrap_or(Vec2::ZERO);
+        Ok(TextureWithOrigin { texture, origin })
     }
 
     pub fn update(&mut self) {
         if !self.visible { return; }
         
-        // Close on ESC or click outside
-        if is_key_pressed(KeyCode::Escape) {
-            self.visible = false;
+        let (mouse_x, mouse_y) = mouse_position();
+        
+        // Handle dragging
+        if is_mouse_button_pressed(MouseButton::Left) {
+            if mouse_y >= self.y && mouse_y <= self.y + 25.0 &&
+               mouse_x >= self.x && mouse_x <= self.x + self.width {
+                self.dragging = true;
+                self.drag_offset_x = mouse_x - self.x;
+                self.drag_offset_y = mouse_y - self.y;
+            }
+        }
+        if is_mouse_button_down(MouseButton::Left) && self.dragging {
+            self.x = mouse_x - self.drag_offset_x;
+            self.y = mouse_y - self.drag_offset_y;
+        } else {
+            self.dragging = false;
         }
     }
 
     pub fn show(&mut self) {
         self.visible = true;
-        // Center on screen
-        self.x = (screen_width() - 200.0) / 2.0;
-        self.y = (screen_height() - 150.0) / 2.0;
+        self.x = (screen_width() - self.width) / 2.0;
+        self.y = (screen_height() - self.height) / 2.0;
     }
 
     pub fn draw(&self, name: &str, level: u32) {
         if !self.visible { return; }
         
-        let width = 200.0;
-        let height = 150.0;
+        // Draw WZ backgrounds in z-order
+        if self.loaded {
+            if let Some(bg) = &self.backgrnd {
+                draw_texture(&bg.texture, self.x - bg.origin.x, self.y - bg.origin.y, WHITE);
+            }
+            if let Some(bg2) = &self.backgrnd2 {
+                draw_texture(&bg2.texture, self.x - bg2.origin.x, self.y - bg2.origin.y, WHITE);
+            }
+            if let Some(bg3) = &self.backgrnd3 {
+                draw_texture(&bg3.texture, self.x - bg3.origin.x, self.y - bg3.origin.y, WHITE);
+            }
+        } else {
+            // Fallback UI
+            draw_rectangle(self.x, self.y, self.width, self.height, Color::from_rgba(40, 40, 60, 240));
+            draw_rectangle_lines(self.x, self.y, self.width, self.height, 2.0, Color::from_rgba(100, 100, 140, 255));
+        }
         
-        // Draw background
-        draw_rectangle(self.x, self.y, width, height, Color::from_rgba(40, 40, 60, 240));
-        draw_rectangle_lines(self.x, self.y, width, height, 2.0, Color::from_rgba(100, 100, 140, 255));
-        
-        // Draw title
-        draw_text("Character Info", self.x + 10.0, self.y + 25.0, 18.0, WHITE);
-        draw_line(self.x + 5.0, self.y + 35.0, self.x + width - 5.0, self.y + 35.0, 1.0, GRAY);
-        
-        // Draw info
-        draw_text(&format!("Name: {}", name), self.x + 15.0, self.y + 60.0, 14.0, WHITE);
-        draw_text(&format!("Level: {}", level), self.x + 15.0, self.y + 80.0, 14.0, WHITE);
-        draw_text("Job: Beginner", self.x + 15.0, self.y + 100.0, 14.0, WHITE);
-        
-        // Draw close hint
-        draw_text("Press ESC to close", self.x + 10.0, self.y + height - 15.0, 10.0, GRAY);
+        // Draw character info text - aligned to info fields in WZ asset
+        // Values positioned to right side of labels
+        draw_text(name, self.x + 75.0, self.y + 35.0, 11.0, BLACK);
+        draw_text(&format!("{}", level), self.x + 75.0, self.y + 52.0, 11.0, BLACK);
+        draw_text("Beginner", self.x + 75.0, self.y + 69.0, 11.0, BLACK);
     }
 }
 

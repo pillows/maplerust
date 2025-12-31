@@ -5,7 +5,7 @@
 pub const SKIP_LOGOS: bool = true;
 
 /// Skip login screen and go directly to character selection
-pub const SKIP_LOGIN: bool = true;
+pub const SKIP_LOGIN: bool = false;
 
 /// Skip all screens and go directly to gameplay with first available character
 pub const SKIP_TO_GAME: bool = true;
@@ -62,7 +62,7 @@ pub const PLAYER_SPEED_MULTIPLIER: f32 = 1.0;
 pub const CAMERA_DEBUG_MODE: bool = false;
 
 /// Show hitboxes and collision boundaries
-pub const SHOW_HITBOXES: bool = false;
+pub const SHOW_HITBOXES: bool = true;
 
 /// Render portals (set to false to improve FPS if needed)
 pub const RENDER_PORTALS: bool = true;

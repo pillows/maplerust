@@ -721,9 +721,11 @@ impl StatusBarUI {
                 target_selected = true;
             }
             
-            // If a chat target was selected, also focus the chat to show chatEnter
+            // If a chat target was selected, focus chat and consume the char
             if target_selected {
                 self.chat_focused = true;
+                // Consume the character so it doesn't appear in input
+                while get_char_pressed().is_some() {}
             }
         }
 
@@ -826,8 +828,12 @@ impl StatusBarUI {
         self.scroll_down.y = base_y;
 
         // Now update all buttons
-        self.chat_open_button.update();
-        self.chat_close_button.update();
+        // Only update the visible chat toggle button
+        if self.is_chat_open {
+            self.chat_close_button.update();
+        } else {
+            self.chat_open_button.update();
+        }
         self.scroll_up.update();
         self.scroll_down.update();
         self.bt_chat.update();
@@ -962,7 +968,7 @@ impl StatusBarUI {
             self.chat_state.cursor_position = self.chat_state.input_buffer.len();
         }
         
-        // Handle backspace key
+        // Handle backspace key - with repeat delay
         if is_key_pressed(KeyCode::Backspace) {
             if self.chat_state.cursor_position > 0 {
                 self.chat_state.input_buffer.remove(self.chat_state.cursor_position - 1);
@@ -989,13 +995,10 @@ impl StatusBarUI {
             
             if character_typed == '\r' || character_typed == '\n' {
                 self.send_message(character);
-            } else if character_typed == '\x08' {  // Backspace character
-                if self.chat_state.cursor_position > 0 {
-                    self.chat_state.input_buffer.remove(self.chat_state.cursor_position - 1);
-                    self.chat_state.cursor_position -= 1;
-                }
+            } else if character_typed == '\x08' {  // Backspace character - already handled above
+                // Skip - handled by is_key_pressed above
             } else if !character_typed.is_control() {
-                // Insert character at cursor position
+                // Insert character at cursor position (including numbers)
                 self.chat_state.input_buffer.insert(self.chat_state.cursor_position, character_typed);
                 self.chat_state.cursor_position += 1;
             }
@@ -1114,14 +1117,17 @@ impl StatusBarUI {
 
         // Draw gauges (HP, MP, EXP) - pass base_x/base_y for positioning
         if gauge_bg_pos.is_some() {
-            // HP and MP at 100%, EXP at 50%
-            self.draw_gauge("hp", 1.0, base_x, base_y);
-            self.draw_gauge("mp", 1.0, base_x, base_y);
+            // Calculate HP/MP percentages based on current/max
+            let hp_pct = character.hp as f32 / character.max_hp.max(1) as f32;
+            let mp_pct = character.mp as f32 / character.max_mp.max(1) as f32;
+            
+            self.draw_gauge("hp", hp_pct, base_x, base_y);
+            self.draw_gauge("mp", mp_pct, base_x, base_y);
             self.draw_gauge("exp", 0.5, base_x, base_y);  // 50% EXP
 
-            // Draw HP/MP/EXP numbers
-            self.draw_gauge_numbers("hp", character.hp, character.hp, base_x, base_y);
-            self.draw_gauge_numbers("mp", character.mp, character.mp, base_x, base_y);
+            // Draw HP/MP/EXP numbers (current/max)
+            self.draw_gauge_numbers("hp", character.hp, character.max_hp, base_x, base_y);
+            self.draw_gauge_numbers("mp", character.mp, character.max_mp, base_x, base_y);
             // For EXP, show as percentage (0-100)
             let exp_percent = 50; // Placeholder
             self.draw_gauge_numbers("exp", exp_percent, 100, base_x, base_y);
@@ -1168,11 +1174,11 @@ impl StatusBarUI {
 
             // Draw chat input text AFTER chatEnter so text is visible on top
             let input_x = if let Some(chat_space) = &self.chat_space {
-                base_x - chat_space.origin.x + 5.0
+                base_x - chat_space.origin.x + 25.0  // More padding from left
             } else {
-                base_x - 512.0 + 5.0
+                base_x - 512.0 + 25.0
             };
-            let input_y = base_y - 46.0;
+            let input_y = base_y - 44.0;  // Adjusted position
             self.draw_chat_input(input_x, input_y, self.chat_focused);
 
             if let Some(chat_cover) = &self.chat_cover {
@@ -1200,8 +1206,12 @@ impl StatusBarUI {
         self.bt_character.draw();
         self.bt_skill.draw();
         self.bt_mts.draw();
-        self.chat_open_button.draw();
-        self.chat_close_button.draw();
+        // Draw chat toggle button based on state
+        if self.is_chat_open {
+            self.chat_close_button.draw();
+        } else {
+            self.chat_open_button.draw();
+        }
         self.scroll_up.draw();
         self.scroll_down.draw();
 
@@ -1217,6 +1227,11 @@ impl StatusBarUI {
             let lv_x = base_x - lv_back.origin.x + 35.0;
             let lv_y = base_y - lv_back.origin.y + 10.0;
             self.draw_level(character.level, lv_x, lv_y);
+            
+            // Draw player name below level
+            let name_x = base_x - lv_back.origin.x + 5.0;
+            let name_y = base_y - lv_back.origin.y + 25.0;
+            draw_text(&character.name, name_x, name_y, 11.0, WHITE);
         }
 
         // Draw gauge edit mode UI
@@ -1376,22 +1391,17 @@ impl StatusBarUI {
     }
 
     /// Draw chat input field with caret
-    fn draw_chat_input(&self, text_x: f32, text_y: f32, has_chat_enter: bool) {
+    fn draw_chat_input(&self, text_x: f32, text_y: f32, _has_chat_enter: bool) {
         let font_size = 12.0;
-
-        // Draw a background for the input area to ensure visibility
-        if self.chat_focused {
-            draw_rectangle(text_x - 2.0, text_y - 12.0, 400.0, 16.0, Color::from_rgba(255, 255, 255, 200));
-        }
 
         // Draw chat target prefix (e.g., "[party]", "[all]")
         let target_prefix = format!("[{}] ", self.current_chat_target);
-        let prefix_color = Color::from_rgba(100, 100, 50, 255);  // Dark yellow/olive
+        let prefix_color = Color::from_rgba(80, 80, 40, 255);  // Dark olive
         draw_text(&target_prefix, text_x, text_y, font_size, prefix_color);
         let prefix_width = measure_text(&target_prefix, None, font_size as u16, 1.0).width;
 
-        // Draw input text - BLACK for visibility
-        let text_color = BLACK;
+        // Draw input text - dark color for visibility on white chatEnter
+        let text_color = Color::from_rgba(30, 30, 30, 255);  // Very dark gray
         
         // Draw text before cursor
         let text_before_cursor = &self.chat_state.input_buffer[..self.chat_state.cursor_position.min(self.chat_state.input_buffer.len())];
@@ -1405,18 +1415,40 @@ impl StatusBarUI {
         if self.chat_focused && self.caret_visible {
             draw_text("|", text_x + prefix_width + before_width, text_y, font_size, text_color);
         }
-        
-        // Debug: show chat state
-        if self.chat_focused {
-            draw_text("(Chat Active - ESC to cancel)", text_x, text_y + 14.0, 10.0, RED);
-        }
     }
 
     /// Draw chat message history - chat_x/chat_y is the top-left of chat_space
     fn draw_chat_messages(&self, chat_x: f32, chat_y: f32) {
-        // Position messages inside the chat area with padding
+        // Draw expanded chat history panel when chat is open
+        if self.is_chat_open && !self.chat_state.messages.is_empty() {
+            let panel_width = 450.0;
+            let panel_height = 180.0;
+            let panel_x = chat_x;
+            let panel_y = chat_y - panel_height - 5.0;
+            
+            // Draw white background panel
+            draw_rectangle(panel_x, panel_y, panel_width, panel_height, Color::from_rgba(255, 255, 255, 245));
+            draw_rectangle_lines(panel_x, panel_y, panel_width, panel_height, 1.0, Color::from_rgba(80, 80, 80, 255));
+            
+            // Draw messages in the panel
+            let text_x = panel_x + 8.0;
+            let mut text_y = panel_y + 16.0;
+            let font_size = 13.0;
+            let line_height = 16.0;
+            let max_lines = 10;
+            
+            // Show most recent messages
+            let start_idx = self.chat_state.messages.len().saturating_sub(max_lines);
+            for msg in self.chat_state.messages.iter().skip(start_idx) {
+                let display_text = format!("{}: {}", msg.sender, msg.text);
+                draw_text(&display_text, text_x, text_y, font_size, Color::from_rgba(20, 20, 20, 255));
+                text_y += line_height;
+            }
+        }
+        
+        // Position messages inside the chat area with padding (original inline display)
         let text_x = chat_x + 10.0;
-        let mut text_y = chat_y + 15.0;  // Start from top with padding
+        let mut text_y = chat_y + 15.0;
         let font_size = 11.0;
         let line_height = 15.0;
 
@@ -1425,8 +1457,7 @@ impl StatusBarUI {
 
         for i in start_idx..end_idx {
             if let Some(msg) = self.chat_state.messages.get(i) {
-                // Draw message with dark gray text for visibility
-                let text_color = Color::from_rgba(50, 50, 50, 255);  // Dark gray
+                let text_color = Color::from_rgba(50, 50, 50, 255);
                 draw_text(&msg.text, text_x, text_y, font_size, text_color);
                 text_y += line_height;
             }
@@ -1463,9 +1494,10 @@ impl StatusBarUI {
         self.bt_channel.is_clicked()
     }
 
-    /// Get menu button screen position for positioning the menu above it
+    /// Get menu button center-top position for positioning the menu above it
     pub fn get_menu_button_pos(&self) -> (f32, f32) {
-        self.bt_menu.get_screen_pos()
+        let (x, y) = self.bt_menu.get_screen_pos();
+        (x + self.bt_menu.width / 2.0, y)
     }
 
     /// Get and clear the last sent chat message (for balloon display)

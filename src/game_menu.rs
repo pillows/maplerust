@@ -354,9 +354,9 @@ impl GameMenu {
         if self.visible {
             self.hide();
         } else {
-            // Show above the button - position menu so bottom aligns with button top
+            // Show above the button - position menu well above the status bar
             let menu_x = button_x - self.width / 2.0;
-            let menu_y = button_y - self.height - 5.0; // 5px gap above button
+            let menu_y = button_y - self.height - 80.0; // 80px gap above button
             // Clamp to screen bounds
             let clamped_x = menu_x.max(0.0).min(screen_width() - self.width);
             let clamped_y = menu_y.max(0.0);

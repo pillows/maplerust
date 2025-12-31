@@ -40,6 +40,7 @@ pub struct ChannelWindow {
     bg: Option<Tex>,
     bg2: Option<Tex>,
     bg3: Option<Tex>,
+    ch_textures: std::collections::HashMap<u8, Texture2D>,  // Channel number textures
     x: f32, y: f32, w: f32, h: f32,
     dragging: bool, drag_off: Vec2,
     selected_channel: u8,
@@ -48,7 +49,8 @@ pub struct ChannelWindow {
 
 impl ChannelWindow {
     pub fn new() -> Self {
-        Self { visible: false, bg: None, bg2: None, bg3: None, x: 200.0, y: 150.0, w: 400.0, h: 170.0,
+        Self { visible: false, bg: None, bg2: None, bg3: None, ch_textures: std::collections::HashMap::new(),
+               x: 200.0, y: 150.0, w: 400.0, h: 170.0,
                dragging: false, drag_off: Vec2::ZERO, selected_channel: 1, loaded: false }
     }
     pub async fn load(&mut self) {
@@ -57,11 +59,20 @@ impl ChannelWindow {
             self.bg = load_tex(&root, "Channel/backgrnd").await;
             self.bg2 = load_tex(&root, "Channel/backgrnd2").await;
             self.bg3 = load_tex(&root, "Channel/backgrnd3").await;
+            
+            // Load channel number textures (ch/1 through ch/20)
+            for i in 1..=20u8 {
+                let path = format!("Channel/ch/{}", i);
+                if let Some(tex) = load_tex(&root, &path).await {
+                    self.ch_textures.insert(i, tex.texture);
+                }
+            }
+            
             if let Some(ref b) = self.bg { 
                 self.w = b.texture.width(); 
                 self.h = b.texture.height(); 
                 self.loaded = true;
-                info!("Channel window loaded: {}x{}", self.w, self.h);
+                info!("Channel window loaded: {}x{}, {} channel textures", self.w, self.h, self.ch_textures.len());
             }
         }
     }
@@ -104,21 +115,26 @@ impl ChannelWindow {
         if let Some(ref b) = self.bg2 { draw_texture(&b.texture, self.x - b.origin.x, self.y - b.origin.y, WHITE); }
         if let Some(ref b) = self.bg3 { draw_texture(&b.texture, self.x - b.origin.x, self.y - b.origin.y, WHITE); }
         
-        draw_text("Channel Selection", self.x + 10.0, self.y + 25.0, 16.0, WHITE);
+        // Draw channel buttons using WZ textures (5 columns, 4 rows)
+        // Position relative to window, accounting for background layout
         for i in 1..=20u8 {
             let col = ((i - 1) % 5) as f32;
             let row = ((i - 1) / 5) as f32;
-            let bx = self.x + 20.0 + col * 70.0;
-            let by = self.y + 50.0 + row * 25.0;
-            let color = if i == self.selected_channel { YELLOW } else { WHITE };
-            // Draw channel button background
-            let bg_color = if i == self.selected_channel { 
-                Color::from_rgba(80, 80, 120, 200) 
-            } else { 
-                Color::from_rgba(50, 50, 70, 150) 
-            };
-            draw_rectangle(bx - 2.0, by - 12.0, 64.0, 20.0, bg_color);
-            draw_text(&format!("Ch {}", i), bx, by, 14.0, color);
+            let bx = self.x + 12.0 + col * 70.0;
+            let by = self.y + 32.0 + row * 28.0;
+            
+            // Draw selection highlight
+            if i == self.selected_channel {
+                draw_rectangle(bx - 2.0, by - 2.0, 66.0, 24.0, Color::from_rgba(100, 100, 180, 150));
+            }
+            
+            // Draw channel texture if available, otherwise fallback to text
+            if let Some(tex) = self.ch_textures.get(&i) {
+                draw_texture(tex, bx, by, WHITE);
+            } else {
+                let color = if i == self.selected_channel { YELLOW } else { WHITE };
+                draw_text(&format!("Ch {}", i), bx + 8.0, by + 16.0, 12.0, color);
+            }
         }
     }
 }

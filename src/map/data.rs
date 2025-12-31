@@ -214,30 +214,30 @@ impl MapData {
         let iy = y as i32;
 
         let mut best_fh: Option<&Foothold> = None;
-        let mut best_distance = 50.0; // Tighter tolerance for standing on platforms
+        let mut best_distance = 100.0;
 
         for fh in &self.footholds {
-            // Check if point is within horizontal range (strict - no margin)
+            // Skip vertical footholds - they're not walkable
+            let dx = (fh.x2 - fh.x1).abs();
+            let dy = (fh.y2 - fh.y1).abs();
+            // Vertical if dy >> dx (ratio > 10:1)
+            if dy > 0 && (dx as f32 / dy as f32) < 0.1 && dy > 10 {
+                continue;
+            }
+            
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
 
-            // Point must be within foothold horizontal bounds
+            // Strict horizontal bounds - must be within foothold
             if ix >= min_x && ix <= max_x {
-                // Calculate Y position on this foothold at the given X
-                let dx = fh.x2 - fh.x1;
-                let dy = fh.y2 - fh.y1;
-
-                let fh_y = if dx != 0 {
-                    fh.y1 + ((ix - fh.x1) * dy) / dx
+                let fh_y = if fh.x2 != fh.x1 {
+                    fh.y1 + ((ix - fh.x1) * (fh.y2 - fh.y1)) / (fh.x2 - fh.x1)
                 } else {
                     fh.y1
                 };
 
-                // Check vertical distance - must be close to the foothold
                 let vertical_distance = (iy as f32 - fh_y as f32).abs();
                 
-                // Accept footholds that are close vertically (within 50px)
-                // Prefer footholds that are at or slightly below the point
                 if vertical_distance < best_distance {
                     best_distance = vertical_distance;
                     best_fh = Some(fh);
@@ -249,34 +249,36 @@ impl MapData {
     }
 
     /// Find the nearest foothold below a position (for spawning/falling)
-    /// Strict horizontal bounds - point must be within foothold range
     pub fn find_foothold_below(&self, x: f32, y: f32) -> Option<(f32, &Foothold)> {
         let ix = x as i32;
         let iy = y as i32;
 
-        let mut closest_y = None;
+        let mut closest_y: Option<i32> = None;
         let mut closest_fh = None;
 
         for fh in &self.footholds {
-            // Check if point is within horizontal range (strict - no margin)
+            // Skip vertical footholds - they're not walkable platforms
+            let dx = (fh.x2 - fh.x1).abs();
+            let dy = (fh.y2 - fh.y1).abs();
+            // Vertical if dy >> dx (ratio > 10:1)
+            if dy > 0 && (dx as f32 / dy as f32) < 0.1 && dy > 10 {
+                continue;
+            }
+            
             let min_x = fh.x1.min(fh.x2);
             let max_x = fh.x1.max(fh.x2);
             
-            // Point must be within foothold horizontal bounds
+            // Strict bounds - must be within foothold horizontally
             if ix >= min_x && ix <= max_x {
-                // Calculate Y position on this foothold at the given X
-                let dx = fh.x2 - fh.x1;
-                let dy = fh.y2 - fh.y1;
-
-                let fh_y = if dx != 0 {
-                    fh.y1 + ((ix - fh.x1) * dy) / dx
+                // Calculate Y on foothold at given X
+                let fh_y = if fh.x2 != fh.x1 {
+                    fh.y1 + ((ix - fh.x1) * (fh.y2 - fh.y1)) / (fh.x2 - fh.x1)
                 } else {
                     fh.y1
                 };
 
-                // Only consider footholds below or at the position (with small tolerance)
+                // Only consider footholds below or at position
                 if fh_y >= iy - 10 {
-                    // Find the closest one below
                     if closest_y.is_none() || fh_y < closest_y.unwrap() {
                         closest_y = Some(fh_y);
                         closest_fh = Some(fh);
@@ -378,5 +380,15 @@ impl MapData {
         } else {
             fh.y1 as f32
         }
+    }
+
+    /// Find connected foothold when walking off an edge
+    /// Returns the connected foothold if one exists in the direction of movement
+    pub fn find_connected_foothold(&self, current_fh: &Foothold, x: f32, moving_right: bool) -> Option<&Foothold> {
+        let next_id = if moving_right { current_fh.next } else { current_fh.prev };
+        if next_id == 0 {
+            return None; // No connected foothold (edge of platform)
+        }
+        self.find_foothold_by_id(next_id)
     }
 }

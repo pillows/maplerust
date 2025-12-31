@@ -1,7 +1,7 @@
 use macroquad::prelude::*;
 use crate::character::CharacterData;
 use crate::flags::{self, DebugFlags};
-use crate::map::{MapData, MapLoader, MapRenderer, MobState, MobAI};
+use crate::map::{MapData, MapLoader, MapRenderer, MobState, MobAI, Foothold};
 use crate::map::portal_loader::PortalCache;
 use crate::game_world::bot_ai::BotAI;
 use crate::audio::AudioManager;
@@ -48,6 +48,8 @@ pub struct GameplayState {
     // Debug map loader
     map_input: String,
     map_input_active: bool,
+    // Mob damage cooldown
+    damage_cooldown: f32,
     loading_new_map: bool,
     backspace_timer: f32,
     backspace_repeat_delay: f32,
@@ -114,6 +116,7 @@ impl GameplayState {
             map_input: String::new(),
             map_input_active: false,
             loading_new_map: false,
+            damage_cooldown: 0.0,
             backspace_timer: 0.0,
             backspace_repeat_delay: 0.05, // Repeat every 50ms when held
             last_npc_click_time: -1.0,
@@ -379,6 +382,7 @@ impl GameplayState {
     }
 
     /// Update game logic
+    #[inline(never)]
     pub fn update(&mut self, dt: f32) {
         // Handle window focus - prevent large dt values when tab is inactive
         // Clamp dt to prevent physics issues when browser loses focus
@@ -552,26 +556,45 @@ impl GameplayState {
         }
 
         if can_move {
-            // Horizontal movement - use foothold extent for boundaries, not VR bounds
-            // VR bounds are for camera, footholds define walkable area
+            // Detect vertical footholds as walls - only block movement INTO them
+            let player_top = self.player_y - 50.0;
+            let player_bottom = self.player_y;
             
-            // Check for invisible walls (platforms at different elevations blocking movement)
-            let mut can_move_left = true;
-            let mut can_move_right = true;
+            let mut wall_left: Option<f32> = None;
+            let mut wall_right: Option<f32> = None;
             
-            // Wall detection only when on ground and collision enabled
-            // Disabled for now as it causes issues - proper wall detection needs
-            // to check for actual wall tiles, not just foothold elevation differences
-            
-            if (is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)) && can_move_left {
-                let new_x = self.player_x - move_speed * clamped_dt;
-                // Enforce left boundary - use foothold extent
-                self.player_x = new_x.max(self.foothold_min_x);
+            for fh in &map.footholds {
+                let dx = (fh.x2 - fh.x1).abs();
+                let dy = (fh.y2 - fh.y1).abs();
+                
+                // Vertical wall: dy >> dx (much taller than wide)
+                if dy > 0 && (dx as f32 / dy as f32) < 0.1 && dy > 10 {
+                    let wall_x = ((fh.x1 + fh.x2) / 2) as f32;
+                    let wall_top = fh.y1.min(fh.y2) as f32;
+                    let wall_bottom = fh.y1.max(fh.y2) as f32;
+                    
+                    // Check vertical overlap with player
+                    if player_top < wall_bottom && player_bottom > wall_top {
+                        // Only block if moving INTO the wall, not away from it
+                        if wall_x < self.player_x && (is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)) {
+                            wall_left = Some(wall_left.map_or(wall_x, |l| l.max(wall_x)));
+                        }
+                        if wall_x > self.player_x && (is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)) {
+                            wall_right = Some(wall_right.map_or(wall_x, |r| r.min(wall_x)));
+                        }
+                    }
+                }
             }
-            if (is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)) && can_move_right {
+            
+            if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+                let new_x = self.player_x - move_speed * clamped_dt;
+                let min_x = wall_left.unwrap_or(self.foothold_min_x);
+                self.player_x = new_x.max(min_x);
+            }
+            if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
                 let new_x = self.player_x + move_speed * clamped_dt;
-                // Enforce right boundary - use foothold extent
-                self.player_x = new_x.min(self.foothold_max_x);
+                let max_x = wall_right.unwrap_or(self.foothold_max_x);
+                self.player_x = new_x.min(max_x);
             }
 
             // Free-roam vertical movement (Space + Up/Down or W/S)
@@ -876,14 +899,10 @@ impl GameplayState {
 
             // Check collision with footholds (only for vertical positioning, not horizontal limits)
             if flags::ENABLE_COLLISION {
-                // Skip foothold collision when dropping through platform
                 if !self.drop_through_platform {
-                    // Try to find foothold at current position (player_y is feet position)
+                    // Simple collision: find foothold at position or below
                     if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y) {
-                        // Calculate Y on the foothold
                         let fh_y = map.get_foothold_y_at(fh, self.player_x);
-
-                        // Snap player to foothold if falling through it
                         if self.player_y >= fh_y && self.player_vy >= 0.0 {
                             self.player_y = fh_y;
                             self.player_vy = 0.0;
@@ -891,18 +910,11 @@ impl GameplayState {
                         } else {
                             self.on_ground = false;
                         }
-                    } else if self.player_vy >= 0.0 {
-                        // No foothold at current position - look for one below
-                        // This handles walking off edges onto lower platforms (steps)
-                        if let Some((fh_y, _fh)) = map.find_foothold_below(self.player_x, self.player_y) {
-                            // Only snap if we're close to the foothold (within 20 pixels)
-                            if self.player_y >= fh_y - 5.0 && self.player_y <= fh_y + 20.0 {
-                                self.player_y = fh_y;
-                                self.player_vy = 0.0;
-                                self.on_ground = true;
-                            } else {
-                                self.on_ground = false;
-                            }
+                    } else if let Some((fh_y, _)) = map.find_foothold_below(self.player_x, self.player_y) {
+                        if self.player_vy >= 0.0 && self.player_y >= fh_y {
+                            self.player_y = fh_y;
+                            self.player_vy = 0.0;
+                            self.on_ground = true;
                         } else {
                             self.on_ground = false;
                         }
@@ -910,17 +922,12 @@ impl GameplayState {
                         self.on_ground = false;
                     }
                 } else {
-                    // While dropping through, keep falling
                     self.on_ground = false;
-
-                    // Reset drop_through flag after falling a bit
-                    // This allows collision with platforms below the original one
                     if self.player_vy > 100.0 {
                         self.drop_through_platform = false;
                     }
                 }
             } else {
-                // No collision mode - gravity still applies
                 self.on_ground = false;
             }
         }
@@ -946,6 +953,43 @@ impl GameplayState {
 
         // Update bot AI
         self.bot_ai.update(clamped_dt, map);
+
+        // Update damage cooldown
+        if self.damage_cooldown > 0.0 {
+            self.damage_cooldown -= clamped_dt;
+        }
+
+        // Check mob collision for damage
+        if self.damage_cooldown <= 0.0 {
+            for mob in self.bot_ai.get_mobs() {
+                let mob_half_width = 20.0;
+                let mob_height = 40.0;
+                let player_half_width = 15.0;
+                let player_height = 45.0;
+                
+                // Simple AABB collision
+                let mob_left = mob.x - mob_half_width;
+                let mob_right = mob.x + mob_half_width;
+                let mob_top = mob.y - mob_height;
+                let mob_bottom = mob.y;
+                
+                let player_left = self.player_x - player_half_width;
+                let player_right = self.player_x + player_half_width;
+                let player_top = self.player_y - player_height;
+                let player_bottom = self.player_y;
+                
+                if player_right > mob_left && player_left < mob_right &&
+                   player_bottom > mob_top && player_top < mob_bottom {
+                    // Collision! Take 1 damage
+                    if self.character.hp > 0 {
+                        self.character.hp = self.character.hp.saturating_sub(1);
+                        self.damage_cooldown = 1.0; // 1 second invincibility
+                        info!("Player hit by mob! HP: {}", self.character.hp);
+                    }
+                    break;
+                }
+            }
+        }
 
         // Update cursor animation
         self.cursor_manager.update(clamped_dt);
@@ -1037,9 +1081,9 @@ impl GameplayState {
         // Update status bar UI
         self.status_bar.update(clamped_dt, &self.character);
 
-        // Check for sent chat message and show balloon
+        // Check for sent chat message and show balloon with player name
         if let Some(message) = self.status_bar.take_last_sent_message() {
-            self.chat_balloon.show_player_chat(&message, self.player_x, self.player_y);
+            self.chat_balloon.show_player_chat_with_name(&self.character.name, &message, self.player_x, self.player_y);
         }
 
         // Update chat balloon player position
@@ -1163,9 +1207,9 @@ impl GameplayState {
             self.key_config.toggle();
         }
         if self.status_bar.bt_menu_clicked() {
-            // Get menu button position and show menu above it
+            // Get menu button center-top position and show menu above it
             let (btn_x, btn_y) = self.status_bar.get_menu_button_pos();
-            self.game_menu.toggle_at(btn_x + 10.0, btn_y);
+            self.game_menu.toggle_at(btn_x, btn_y);
         }
         if self.status_bar.bt_channel_clicked() {
             self.channel_window.toggle();

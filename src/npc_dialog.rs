@@ -42,13 +42,10 @@ pub struct ActiveNpcDialog {
 /// NPC Dialog system using UtilDlgEx pieces
 pub struct NpcDialogSystem {
     loaded: bool,
-    // UtilDlgEx pieces - t=top, c=corner, line=text line bg, is=bottom, it=inner top, ic=inner corner
+    // UtilDlgEx pieces - t=top, c=middle, s=bottom
     tex_t: Option<Texture2D>,
     tex_c: Option<Texture2D>,
-    tex_line: Option<Texture2D>,
-    tex_is: Option<Texture2D>,
-    tex_it: Option<Texture2D>,
-    tex_ic: Option<Texture2D>,
+    tex_s: Option<Texture2D>,
     // Buttons
     btn_ok: DialogButton,
     btn_prev: DialogButton,
@@ -60,6 +57,10 @@ pub struct NpcDialogSystem {
     y: f32,
     btn_hovered: bool,
     btn_pressed: bool,
+    // Dragging state
+    is_dragging: bool,
+    drag_offset_x: f32,
+    drag_offset_y: f32,
 }
 
 impl NpcDialogSystem {
@@ -68,10 +69,7 @@ impl NpcDialogSystem {
             loaded: false,
             tex_t: None,
             tex_c: None,
-            tex_line: None,
-            tex_is: None,
-            tex_it: None,
-            tex_ic: None,
+            tex_s: None,
             btn_ok: DialogButton::default(),
             btn_prev: DialogButton::default(),
             btn_next: DialogButton::default(),
@@ -81,6 +79,9 @@ impl NpcDialogSystem {
             y: 100.0,
             btn_hovered: false,
             btn_pressed: false,
+            is_dragging: false,
+            drag_offset_x: 0.0,
+            drag_offset_y: 0.0,
         }
     }
 
@@ -98,20 +99,15 @@ impl NpcDialogSystem {
                 if root_node.write().unwrap().parse(&root_node).is_ok() {
                     self.tex_t = Self::load_tex(&root_node, "UtilDlgEx/t").await;
                     self.tex_c = Self::load_tex(&root_node, "UtilDlgEx/c").await;
-                    self.tex_line = Self::load_tex(&root_node, "UtilDlgEx/line").await;
-                    self.tex_is = Self::load_tex(&root_node, "UtilDlgEx/is").await;
-                    self.tex_it = Self::load_tex(&root_node, "UtilDlgEx/it").await;
-                    self.tex_ic = Self::load_tex(&root_node, "UtilDlgEx/ic").await;
+                    self.tex_s = Self::load_tex(&root_node, "UtilDlgEx/s").await;
 
                     self.btn_ok = Self::load_button(&root_node, "UtilDlgEx/BtOK").await;
                     self.btn_prev = Self::load_button(&root_node, "UtilDlgEx/BtPrev").await;
                     self.btn_next = Self::load_button(&root_node, "UtilDlgEx/BtNext").await;
 
                     self.loaded = true;
-                    info!("NPC dialog loaded: t={}, c={}, line={}, is={}, it={}, ic={}", 
-                        self.tex_t.is_some(), self.tex_c.is_some(), 
-                        self.tex_line.is_some(), self.tex_is.is_some(),
-                        self.tex_it.is_some(), self.tex_ic.is_some());
+                    info!("NPC dialog loaded: t={}, c={}, s={}", 
+                        self.tex_t.is_some(), self.tex_c.is_some(), self.tex_s.is_some());
                 }
             }
         }
@@ -175,33 +171,56 @@ impl NpcDialogSystem {
         if !self.is_visible() { return; }
 
         let width = 350.0;
-        let t_h = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(12.0);
-        let line_h = self.tex_line.as_ref().map(|t| t.height()).unwrap_or(14.0);
-        let it_h = self.tex_it.as_ref().map(|t| t.height()).unwrap_or(0.0);
+        let fill_count = 6;
+        let t_h = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(10.0);
+        let c_h = self.tex_c.as_ref().map(|t| t.height()).unwrap_or(14.0);
+        let s_h = self.tex_s.as_ref().map(|t| t.height()).unwrap_or(10.0);
         
-        // Calculate dialog height based on text lines
-        let lines = if let Some(ref dialog) = self.active_dialog {
-            self.wrap_text(&dialog.text, width - 80.0, 12.0)
-        } else {
-            vec![]
-        };
-        let num_lines = lines.len().max(3);
-        let dialog_height = t_h + it_h + (num_lines as f32 * line_h);
+        // Total height of dialog window
+        let total_height = t_h + (fill_count as f32 * c_h) + s_h;
+        
+        // Button position - inside the window, in the bottom section
+        // From C++: y_cord = height_ + 48, but we want it inside the bottom texture
+        let btn_x = self.x + width - 60.0; // Right side
+        let btn_y = self.y + t_h + (fill_count as f32 * c_h) + (s_h / 2.0) - 10.0; // Center of bottom section
+        let btn_w = self.btn_ok.width.max(40.0);
+        let btn_h = self.btn_ok.height.max(20.0);
 
-        // Check OK button hover/click
         let (mx, my) = mouse_position();
-        let btn_x = self.x + width - 60.0;
-        let btn_y = self.y + dialog_height - 5.0;
-        self.btn_hovered = mx >= btn_x && mx <= btn_x + self.btn_ok.width 
-            && my >= btn_y && my <= btn_y + self.btn_ok.height;
+        
+        // Check button hover/click
+        self.btn_hovered = mx >= btn_x && mx <= btn_x + btn_w 
+            && my >= btn_y && my <= btn_y + btn_h;
         self.btn_pressed = self.btn_hovered && is_mouse_button_down(MouseButton::Left);
 
+        // Close on button click, Enter, or Escape
         if (self.btn_hovered && is_mouse_button_released(MouseButton::Left)) || 
-           is_key_pressed(KeyCode::Enter) {
+           is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape) {
             self.close_dialog();
+            return;
+        }
+        
+        // Handle dragging only on top area (not on button)
+        let is_in_drag_area = mx >= self.x && mx <= self.x + width 
+            && my >= self.y && my <= self.y + t_h;
+        
+        if is_mouse_button_pressed(MouseButton::Left) && is_in_drag_area {
+            self.is_dragging = true;
+            self.drag_offset_x = mx - self.x;
+            self.drag_offset_y = my - self.y;
+        }
+        
+        if self.is_dragging {
+            if is_mouse_button_down(MouseButton::Left) {
+                self.x = mx - self.drag_offset_x;
+                self.y = my - self.drag_offset_y;
+            } else {
+                self.is_dragging = false;
+            }
         }
     }
 
+    #[inline(never)]
     pub fn draw(&self, _camera_x: f32, _camera_y: f32) {
         let dialog = match &self.active_dialog {
             Some(d) if d.visible => d,
@@ -209,150 +228,107 @@ impl NpcDialogSystem {
         };
 
         let width = 350.0;
-        let t_h = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(12.0);
-        let line_h = self.tex_line.as_ref().map(|t| t.height()).unwrap_or(14.0);
-        let is_h = self.tex_is.as_ref().map(|t| t.height()).unwrap_or(12.0);
-        let c_w = self.tex_c.as_ref().map(|t| t.width()).unwrap_or(6.0);
-
-        let lines = self.wrap_text(&dialog.text, width - 80.0, 12.0);
-        let num_lines = lines.len().max(3);
-
-        // === Draw TOP row (outer border) ===
-        // Left corner
-        if let Some(c) = &self.tex_c {
-            draw_texture(c, self.x, self.y, WHITE);
-        }
-        // Top edge (tiled)
-        if let Some(t) = &self.tex_t {
-            let mut x = self.x + c_w;
-            while x < self.x + width - c_w {
-                let w = (self.x + width - c_w - x).min(t.width());
-                draw_texture_ex(t, x, self.y, WHITE, DrawTextureParams {
-                    source: Some(Rect::new(0.0, 0.0, w, t.height())),
-                    ..Default::default()
-                });
-                x += t.width();
+        let fill_count = 6;  // Base fill count
+        let left_padding = 20.0;
+        
+        let t_h = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(10.0);
+        let t_w = self.tex_t.as_ref().map(|t| t.width()).unwrap_or(width);
+        let c_h = self.tex_c.as_ref().map(|t| t.height()).unwrap_or(14.0);
+        let c_w = self.tex_c.as_ref().map(|t| t.width()).unwrap_or(width);
+        let s_h = self.tex_s.as_ref().map(|t| t.height()).unwrap_or(10.0);
+        let s_w = self.tex_s.as_ref().map(|t| t.width()).unwrap_or(width);
+        
+        let has_textures = self.tex_t.is_some() && self.tex_c.is_some() && self.tex_s.is_some();
+        
+        if has_textures {
+            // Draw TOP
+            if let Some(t) = &self.tex_t {
+                draw_texture(t, self.x, self.y, WHITE);
             }
-        }
-        // Right corner (flipped)
-        if let Some(c) = &self.tex_c {
-            draw_texture_ex(c, self.x + width - c_w, self.y, WHITE, DrawTextureParams {
-                flip_x: true, ..Default::default()
-            });
-        }
-
-        // === Draw INNER TOP row (below outer top) ===
-        let mut y = self.y + t_h;
-        let it_h = self.tex_it.as_ref().map(|t| t.height()).unwrap_or(0.0);
-        if it_h > 0.0 {
-            // Left inner corner
-            if let Some(ic) = &self.tex_ic {
-                draw_texture(ic, self.x, y, WHITE);
-            } else if let Some(c) = &self.tex_c {
-                draw_texture(c, self.x, y, WHITE);
-            }
-            // Inner top (tiled)
-            if let Some(it) = &self.tex_it {
-                let mut x = self.x + c_w;
-                while x < self.x + width - c_w {
-                    let w = (self.x + width - c_w - x).min(it.width());
-                    draw_texture_ex(it, x, y, WHITE, DrawTextureParams {
-                        source: Some(Rect::new(0.0, 0.0, w, it.height())),
-                        ..Default::default()
-                    });
-                    x += it.width();
+            
+            // Draw FILL (middle) - repeat fill_count times
+            let mut y = self.y + t_h;
+            for _ in 0..fill_count {
+                if let Some(c) = &self.tex_c {
+                    draw_texture(c, self.x, y, WHITE);
                 }
+                y += c_h;
             }
-            // Right inner corner (flipped)
-            if let Some(ic) = &self.tex_ic {
-                draw_texture_ex(ic, self.x + width - c_w, y, WHITE, DrawTextureParams {
-                    flip_x: true, ..Default::default()
-                });
-            } else if let Some(c) = &self.tex_c {
-                draw_texture_ex(c, self.x + width - c_w, y, WHITE, DrawTextureParams {
-                    flip_x: true, ..Default::default()
-                });
+            
+            // Draw BOTTOM
+            if let Some(s) = &self.tex_s {
+                draw_texture(s, self.x, y, WHITE);
             }
-            y += it_h;
-        }
-
-        // === Draw MIDDLE rows (one per line of text) ===
-        for _ in 0..num_lines {
-            // Left edge
-            if let Some(c) = &self.tex_c {
-                draw_texture(c, self.x, y, WHITE);
+            
+            let total_height = t_h + (fill_count as f32 * c_h) + s_h;
+            
+            // Draw NPC speaker on left side, centered vertically in middle section
+            if let Some(npc_tex) = &dialog.npc_texture {
+                let npc_width = npc_tex.width();
+                let npc_height = npc_tex.height();
+                let middle_height = fill_count as f32 * c_h;
+                // Center NPC vertically in the middle section
+                let npc_x = self.x + left_padding + (22.0 - left_padding); // 22 from C++ example
+                let npc_y = self.y + t_h + (middle_height - npc_height) / 2.0;
+                draw_texture(npc_tex, npc_x, npc_y, WHITE);
             }
-            // Line background (white, tiled)
-            if let Some(line) = &self.tex_line {
-                let mut x = self.x + c_w;
-                while x < self.x + width - c_w {
-                    let w = (self.x + width - c_w - x).min(line.width());
-                    draw_texture_ex(line, x, y, WHITE, DrawTextureParams {
-                        source: Some(Rect::new(0.0, 0.0, w, line.height())),
-                        ..Default::default()
+            
+            // Draw text at x + 166, y + 48 (from TypeScript/C++ examples)
+            let text_x = self.x + 166.0;
+            let text_y = self.y + 48.0;
+            let lines = self.wrap_text(&dialog.text, 180.0, 12.0);
+            let mut ty = text_y;
+            for line in &lines {
+                if let Some(font) = &self.font {
+                    draw_text_ex(line, text_x, ty, TextParams {
+                        font: Some(font), font_size: 12, color: BLACK, ..Default::default()
                     });
-                    x += line.width();
+                } else {
+                    draw_text(line, text_x, ty, 12.0, BLACK);
                 }
+                ty += 14.0;
             }
-            // Right edge (flipped)
-            if let Some(c) = &self.tex_c {
-                draw_texture_ex(c, self.x + width - c_w, y, WHITE, DrawTextureParams {
-                    flip_x: true, ..Default::default()
-                });
-            }
-            y += line_h;
-        }
-
-        // === Draw BOTTOM row ===
-        // Left corner (flipped vertically)
-        if let Some(c) = &self.tex_c {
-            draw_texture_ex(c, self.x, y, WHITE, DrawTextureParams {
-                flip_y: true, ..Default::default()
-            });
-        }
-        // Bottom edge (tiled)
-        if let Some(is) = &self.tex_is {
-            let mut x = self.x + c_w;
-            while x < self.x + width - c_w {
-                let w = (self.x + width - c_w - x).min(is.width());
-                draw_texture_ex(is, x, y, WHITE, DrawTextureParams {
-                    source: Some(Rect::new(0.0, 0.0, w, is.height())),
-                    ..Default::default()
-                });
-                x += is.width();
-            }
-        }
-        // Right corner (flipped both)
-        if let Some(c) = &self.tex_c {
-            draw_texture_ex(c, self.x + width - c_w, y, WHITE, DrawTextureParams {
-                flip_x: true, flip_y: true, ..Default::default()
-            });
-        }
-
-        // Draw NPC image if available
-        let text_start_x = if let Some(npc_tex) = &dialog.npc_texture {
-            draw_texture(npc_tex, self.x + 10.0, self.y + t_h + it_h + 5.0, WHITE);
-            self.x + 70.0
+            
+            // Draw OK button inside the window, in the bottom section
+            let btn_x = self.x + width - 60.0; // Right side
+            let btn_y = self.y + t_h + (fill_count as f32 * c_h) + (s_h / 2.0) - 10.0; // Center of bottom section
+            self.btn_ok.draw(btn_x, btn_y, self.btn_hovered, self.btn_pressed);
         } else {
-            self.x + 15.0
-        };
-
-        // Draw text
-        let mut text_y = self.y + t_h + it_h + 14.0;
-        for line in &lines {
-            if let Some(font) = &self.font {
-                draw_text_ex(line, text_start_x, text_y, TextParams {
-                    font: Some(font), font_size: 12, color: BLACK, ..Default::default()
-                });
+            // Fallback rendering
+            let height = 150.0;
+            draw_rectangle(self.x, self.y, width, height, Color::from_rgba(245, 235, 210, 255));
+            draw_rectangle_lines(self.x, self.y, width, height, 2.0, Color::from_rgba(139, 90, 43, 255));
+            
+            // NPC avatar
+            let text_x = if let Some(npc_tex) = &dialog.npc_texture {
+                draw_texture(npc_tex, self.x + 20.0, self.y + 20.0, WHITE);
+                self.x + 100.0
             } else {
-                draw_text(line, text_start_x, text_y, 12.0, BLACK);
+                self.x + 20.0
+            };
+            
+            // Text
+            let lines = self.wrap_text(&dialog.text, 200.0, 12.0);
+            let mut ty = self.y + 30.0;
+            for line in &lines {
+                draw_text(line, text_x, ty, 12.0, BLACK);
+                ty += 16.0;
             }
-            text_y += line_h;
+            
+            // OK button
+            let btn_x = self.x + 9.0;
+            let btn_y = self.y + height - 30.0;
+            let btn_color = if self.btn_pressed {
+                Color::from_rgba(180, 140, 80, 255)
+            } else if self.btn_hovered {
+                Color::from_rgba(220, 180, 120, 255)
+            } else {
+                Color::from_rgba(200, 160, 100, 255)
+            };
+            draw_rectangle(btn_x, btn_y, 50.0, 20.0, btn_color);
+            draw_rectangle_lines(btn_x, btn_y, 50.0, 20.0, 1.0, Color::from_rgba(139, 90, 43, 255));
+            draw_text("OK", btn_x + 17.0, btn_y + 14.0, 14.0, BLACK);
         }
-
-        // Draw OK button at bottom right
-        let btn_y = y - 5.0;
-        self.btn_ok.draw(self.x + width - 60.0, btn_y, self.btn_hovered, self.btn_pressed);
     }
 
     fn wrap_text(&self, text: &str, max_width: f32, font_size: f32) -> Vec<String> {

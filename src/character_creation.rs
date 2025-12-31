@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use crate::assets::AssetManager;
 use crate::character::CharacterData;
+use crate::cursor::CursorManager;
 use crate::flags;
 use std::sync::Arc;
 use wz_reader::version::guess_iv_from_wz_img;
@@ -217,6 +218,12 @@ pub struct CharacterCreationState {
     // Creation state
     character_created: bool,
     transition_to_char_select: bool,
+    
+    // Cursor
+    cursor_manager: CursorManager,
+    
+    // Name input
+    name_input_active: bool,
 }
 
 impl CharacterCreationState {
@@ -269,6 +276,8 @@ impl CharacterCreationState {
             is_transitioning_in: true,
             character_created: false,
             transition_to_char_select: false,
+            cursor_manager: CursorManager::new(),
+            name_input_active: true,
         }
     }
 
@@ -280,6 +289,12 @@ impl CharacterCreationState {
     /// Load all character creation screen assets from Login.img
     pub async fn load_assets(&mut self) {
         info!("Loading character creation screen assets...");
+        
+        // Load cursor
+        self.cursor_manager.load_cursors().await;
+        if self.cursor_manager.is_loaded() {
+            show_mouse(false);
+        }
 
         let bytes = match AssetManager::fetch_and_cache(LOGIN_URL, LOGIN_CACHE_NAME).await {
             Ok(bytes) => bytes,
@@ -617,6 +632,9 @@ impl CharacterCreationState {
                 self.character_name.push(ch);
             }
         }
+        
+        // Update cursor
+        self.cursor_manager.update(dt);
     }
 
     /// Get which element is at the given mouse position
@@ -827,5 +845,17 @@ impl CharacterCreationState {
                 }
             }
         }
+        
+        // Draw name input prompt
+        let input_text = if self.character_name.is_empty() {
+            "Enter your character name..."
+        } else {
+            &self.character_name
+        };
+        let input_color = if self.character_name.is_empty() { GRAY } else { WHITE };
+        draw_text(input_text, center_x - 100.0, 120.0, 16.0, input_color);
+        
+        // Draw cursor
+        self.cursor_manager.draw();
     }
 }

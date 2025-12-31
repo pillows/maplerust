@@ -196,6 +196,10 @@ pub struct CharacterSelectionState {
 
     // Cursor manager
     cursor_manager: CursorManager,
+    
+    // Double-click tracking
+    last_click_time: f32,
+    last_click_index: Option<usize>,
 }
 
 impl CharacterSelectionState {
@@ -235,6 +239,8 @@ impl CharacterSelectionState {
             transition_time: 0.0,
             is_transitioning_in: true,
             cursor_manager: CursorManager::new(),
+            last_click_time: -1.0,
+            last_click_index: None,
         }
     }
 
@@ -487,11 +493,12 @@ impl CharacterSelectionState {
         self.page_left_button.update();
         self.page_right_button.update();
 
-        // Check for character panel clicks
+        // Check for character panel clicks (with double-click support)
         if is_mouse_button_released(MouseButton::Left) && !self.characters.is_empty() {
             let (mouse_x, mouse_y) = mouse_position();
             let panel_x = 150.0;
             let mut panel_y = 150.0;
+            let current_time = get_time() as f32;
 
             for (idx, _character) in self.characters.iter().enumerate().take(3) {
                 if let Some(panel) = self.char_info_panels.first() {
@@ -501,8 +508,23 @@ impl CharacterSelectionState {
                     // Check if mouse is within panel bounds
                     if mouse_x >= draw_x && mouse_x <= draw_x + panel.texture.width()
                         && mouse_y >= draw_y && mouse_y <= draw_y + panel.texture.height() {
-                        self.selected_character_index = Some(idx);
-                        info!("Selected character {}: {}", idx, self.characters[idx].name);
+                        
+                        // Check for double-click
+                        if self.last_click_index == Some(idx) && 
+                           (current_time - self.last_click_time) < 0.5 {
+                            // Double-click! Enter game
+                            info!("Double-clicked character {}: {}", idx, self.characters[idx].name);
+                            self.selected_character_index = Some(idx);
+                            self.should_transition_to_game = true;
+                        } else {
+                            // Single click - select
+                            self.selected_character_index = Some(idx);
+                            info!("Selected character {}: {}", idx, self.characters[idx].name);
+                        }
+                        
+                        self.last_click_time = current_time;
+                        self.last_click_index = Some(idx);
+                        break;
                     }
                 }
                 panel_y += 120.0;

@@ -99,6 +99,11 @@ impl BotAI {
         }
     }
 
+    /// Get all mob states for collision detection
+    pub fn get_mobs(&self) -> &[BotState] {
+        &self.bot_states
+    }
+
     /// Initialize bot states from map life data (mobs only)
     pub fn initialize_from_map(&mut self, map: &MapData) {
         self.bot_states.clear();
@@ -109,20 +114,35 @@ impl BotAI {
             if life.life_type == "m" {
                 let mut bot = BotState::new(life);
 
-                // Find foothold for this mob - first try specified foothold
+                // Find foothold for this mob using the specified foothold ID
                 if life.foothold != 0 {
-                    if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
-                        bot.y = map.get_foothold_y_at(fh, bot.x);
-                        bot.on_ground = true;
-                    } else if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
-                        bot.y = foothold_y;
-                        bot.on_ground = true;
+                    if let Some(fh) = map.footholds.iter().find(|f| f.id == life.foothold) {
+                        // Check if the specified foothold is vertical (not walkable)
+                        let dx = (fh.x2 - fh.x1).abs();
+                        let dy = (fh.y2 - fh.y1).abs();
+                        let is_vertical = dy > 0 && (dx as f32 / dy as f32) < 0.1 && dy > 10;
+                        
+                        if !is_vertical {
+                            // Horizontal foothold - use it
+                            bot.y = map.get_foothold_y_at(fh, bot.x);
+                            bot.on_ground = true;
+                        } else {
+                            // Vertical foothold - find horizontal one below
+                            if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
+                                bot.y = foothold_y;
+                                bot.on_ground = true;
+                            }
+                        }
+                    } else {
+                        // Foothold ID not found, find one below
+                        if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
+                            bot.y = foothold_y;
+                            bot.on_ground = true;
+                        }
                     }
                 } else if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
                     bot.y = foothold_y;
                     bot.on_ground = true;
-                } else {
-                    warn!("No foothold found for mob {} at ({}, {})", life.id, bot.x, bot.y);
                 }
 
                 self.bot_states.push(bot);
@@ -134,10 +154,19 @@ impl BotAI {
         let num_fake_players = 3.min(fake_player_names.len());
         
         for i in 0..num_fake_players {
-            // Find a random spawn point on a foothold
-            if !map.footholds.is_empty() {
-                let fh_idx = rand::gen_range(0, map.footholds.len());
-                let fh = &map.footholds[fh_idx];
+            // Find a random spawn point on a horizontal foothold (not vertical)
+            let horizontal_footholds: Vec<_> = map.footholds.iter()
+                .filter(|fh| {
+                    let dx = (fh.x2 - fh.x1).abs() as f32;
+                    let dy = (fh.y2 - fh.y1).abs() as f32;
+                    // Only use horizontal footholds (dx > dy or dx > 2.0)
+                    dx > 2.0 && dx > dy
+                })
+                .collect();
+            
+            if !horizontal_footholds.is_empty() {
+                let fh_idx = rand::gen_range(0, horizontal_footholds.len());
+                let fh = horizontal_footholds[fh_idx];
                 let spawn_x = rand::gen_range(fh.x1.min(fh.x2) as f32, fh.x1.max(fh.x2) as f32);
                 // Player Y is at feet level (on the foothold)
                 let spawn_y = map.get_foothold_y_at(fh, spawn_x);
@@ -207,8 +236,8 @@ impl BotAI {
         player.y += player.vy * dt;
 
         // Check collision with footholds (player.y is feet position)
-        if let Some(fh) = map.find_foothold_at(player.x, player.y) {
-            let fh_y = map.get_foothold_y_at(fh, player.x);
+        // Use find_foothold_below to find ground beneath player
+        if let Some((fh_y, _fh)) = map.find_foothold_below(player.x, player.y - 10.0) {
             if player.y >= fh_y && player.vy >= 0.0 {
                 player.y = fh_y;
                 player.vy = 0.0;
@@ -300,23 +329,13 @@ impl BotAI {
         bot.y += bot.vy * dt;
 
         // Check collision with footholds (bot.y is the mob's feet position)
-        if let Some(fh) = map.find_foothold_at(bot.x, bot.y) {
-            // Calculate Y on the foothold
-            let fh_y = map.get_foothold_y_at(fh, bot.x);
-
-            // Snap to foothold if falling through it
-            if bot.y >= fh_y && bot.vy >= 0.0 {
+        // Always try to find and snap to a foothold
+        if let Some((fh_y, _)) = map.find_foothold_below(bot.x, bot.y + 50.0) {
+            // Snap to foothold if close enough or falling
+            if bot.y >= fh_y - 5.0 || bot.vy >= 0.0 {
                 bot.y = fh_y;
                 bot.vy = 0.0;
                 bot.on_ground = true;
-
-                // Small chance to jump when on ground
-                if rand::gen_range(0.0, 1.0) < 0.1 * dt {
-                    bot.vy = -300.0;
-                    bot.on_ground = false;
-                }
-            } else {
-                bot.on_ground = false;
             }
         } else {
             bot.on_ground = false;

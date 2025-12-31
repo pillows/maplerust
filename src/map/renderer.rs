@@ -599,10 +599,8 @@ impl MapRenderer {
                         FakePlayerState::Walk => CharacterState::Move,
                         FakePlayerState::Jump => CharacterState::Jump,
                     };
-                    // Create a temporary renderer copy with the fake player's facing direction
-                    let mut temp_renderer = renderer.clone();
-                    temp_renderer.update(0.0, state, player.facing_right);
-                    temp_renderer.draw(screen_x, screen_y, state);
+                    // Draw with the fake player's animation timer to select frame
+                    renderer.draw_with_timer(screen_x, screen_y, state, player.facing_right, player.animation_timer);
                 } else {
                     self.draw_fallback_player(screen_x, screen_y);
                 }

@@ -231,7 +231,25 @@ impl ChatBalloonSystem {
             text: text.to_string(),
             x: player_x,
             y: player_y,
-            offset_y: -90.0,  // Higher above player head to not cover body
+            offset_y: -110.0,  // Much higher above player head
+            follows_player: true,
+            lifetime: 4.0,
+            max_lifetime: 4.0,
+            balloon_type: 0,
+        });
+    }
+
+    /// Show player chat balloon with name prefix
+    pub fn show_player_chat_with_name(&mut self, name: &str, text: &str, player_x: f32, player_y: f32) {
+        // Remove any existing player balloons
+        self.active_balloons.retain(|b| !b.follows_player);
+        
+        let full_text = format!("{}: {}", name, text);
+        self.active_balloons.push(ActiveBalloon {
+            text: full_text,
+            x: player_x,
+            y: player_y,
+            offset_y: -110.0,  // Much higher above player head
             follows_player: true,
             lifetime: 4.0,
             max_lifetime: 4.0,
