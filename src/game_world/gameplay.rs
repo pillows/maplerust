@@ -881,21 +881,28 @@ impl GameplayState {
                     // Try to find foothold at current position (player_y is feet position)
                     if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y) {
                         // Calculate Y on the foothold
-                        let dx = fh.x2 - fh.x1;
-                        let dy = fh.y2 - fh.y1;
-                        let ix = self.player_x as i32;
-
-                        let fh_y = if dx != 0 {
-                            (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-                        } else {
-                            fh.y1 as f32
-                        };
+                        let fh_y = map.get_foothold_y_at(fh, self.player_x);
 
                         // Snap player to foothold if falling through it
                         if self.player_y >= fh_y && self.player_vy >= 0.0 {
                             self.player_y = fh_y;
                             self.player_vy = 0.0;
                             self.on_ground = true;
+                        } else {
+                            self.on_ground = false;
+                        }
+                    } else if self.player_vy >= 0.0 {
+                        // No foothold at current position - look for one below
+                        // This handles walking off edges onto lower platforms (steps)
+                        if let Some((fh_y, _fh)) = map.find_foothold_below(self.player_x, self.player_y) {
+                            // Only snap if we're close to the foothold (within 20 pixels)
+                            if self.player_y >= fh_y - 5.0 && self.player_y <= fh_y + 20.0 {
+                                self.player_y = fh_y;
+                                self.player_vy = 0.0;
+                                self.on_ground = true;
+                            } else {
+                                self.on_ground = false;
+                            }
                         } else {
                             self.on_ground = false;
                         }

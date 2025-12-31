@@ -109,13 +109,20 @@ impl BotAI {
             if life.life_type == "m" {
                 let mut bot = BotState::new(life);
 
-                // Find foothold below spawn point and place mob on it
-                // This ensures mobs spawn on platforms correctly
-                if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
+                // Find foothold for this mob - first try specified foothold
+                if life.foothold != 0 {
+                    if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
+                        bot.y = map.get_foothold_y_at(fh, bot.x);
+                        bot.on_ground = true;
+                    } else if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
+                        bot.y = foothold_y;
+                        bot.on_ground = true;
+                    }
+                } else if let Some((foothold_y, _fh)) = map.find_foothold_below(bot.x, bot.y) {
                     bot.y = foothold_y;
                     bot.on_ground = true;
                 } else {
-                    warn!("No foothold found below mob {} spawn point ({}, {})", life.id, bot.x, bot.y);
+                    warn!("No foothold found for mob {} at ({}, {})", life.id, bot.x, bot.y);
                 }
 
                 self.bot_states.push(bot);
@@ -292,22 +299,14 @@ impl BotAI {
         // Update vertical position
         bot.y += bot.vy * dt;
 
-        // Check collision with footholds
-        if let Some(fh) = map.find_foothold_at(bot.x, bot.y + 30.0) {
+        // Check collision with footholds (bot.y is the mob's feet position)
+        if let Some(fh) = map.find_foothold_at(bot.x, bot.y) {
             // Calculate Y on the foothold
-            let dx = fh.x2 - fh.x1;
-            let dy = fh.y2 - fh.y1;
-            let ix = bot.x as i32;
-
-            let fh_y = if dx != 0 {
-                (fh.y1 + ((ix - fh.x1) * dy) / dx) as f32
-            } else {
-                fh.y1 as f32
-            };
+            let fh_y = map.get_foothold_y_at(fh, bot.x);
 
             // Snap to foothold if falling through it
-            if bot.y + 30.0 >= fh_y && bot.vy >= 0.0 {
-                bot.y = fh_y - 30.0;
+            if bot.y >= fh_y && bot.vy >= 0.0 {
+                bot.y = fh_y;
                 bot.vy = 0.0;
                 bot.on_ground = true;
 

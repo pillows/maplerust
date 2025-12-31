@@ -231,7 +231,7 @@ impl ChatBalloonSystem {
             text: text.to_string(),
             x: player_x,
             y: player_y,
-            offset_y: -70.0,  // Above player head
+            offset_y: -90.0,  // Higher above player head to not cover body
             follows_player: true,
             lifetime: 4.0,
             max_lifetime: 4.0,

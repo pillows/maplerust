@@ -1152,31 +1152,28 @@ impl StatusBarUI {
                 draw_texture(&chat_space2.texture, chat_x, chat_y, WHITE);
             }
 
-            // Draw chat target icon BEFORE chatEnter to avoid overlap
+            // Draw chat target icon
             if let Some(target_tex) = self.chat_targets.get(&self.current_chat_target) {
                 draw_texture(&target_tex.texture, base_x - target_tex.origin.x, base_y - target_tex.origin.y, WHITE);
             }
 
-            // Draw chat input FIRST (before chatEnter to avoid overlap)
-            // Position based on chat_space origin for proper alignment
-            let input_x = if let Some(chat_space) = &self.chat_space {
-                base_x - chat_space.origin.x + 5.0  // Align with chat space left edge
-            } else {
-                base_x - 512.0 + 5.0  // Fallback
-            };
-            let input_y = base_y - 46.0;   // Vertically centered in chat area
-            self.draw_chat_input(input_x, input_y, self.chat_focused);
-
-            // Draw chatEnter overlay when chat is focused (shows input area more clearly)
-            // Draw AFTER chat input so it doesn't cover the text
+            // Draw chatEnter FIRST (background for input area) when chat is focused
             if self.chat_focused {
                 if let Some(chat_enter) = &self.chat_enter {
-                    // Position chatEnter to the RIGHT of the chat input area, not overlapping
                     let enter_x = base_x - chat_enter.origin.x;
                     let enter_y = base_y - chat_enter.origin.y;
                     draw_texture(&chat_enter.texture, enter_x, enter_y, WHITE);
                 }
             }
+
+            // Draw chat input text AFTER chatEnter so text is visible on top
+            let input_x = if let Some(chat_space) = &self.chat_space {
+                base_x - chat_space.origin.x + 5.0
+            } else {
+                base_x - 512.0 + 5.0
+            };
+            let input_y = base_y - 46.0;
+            self.draw_chat_input(input_x, input_y, self.chat_focused);
 
             if let Some(chat_cover) = &self.chat_cover {
                 draw_texture(&chat_cover.texture, base_x - chat_cover.origin.x, base_y - chat_cover.origin.y, WHITE);
@@ -1187,8 +1184,6 @@ impl StatusBarUI {
                 self.draw_chat_messages(chat_x, chat_y);
             }
         }
-
-        // Chat target icon is now drawn before chatEnter to avoid overlap
 
         // Draw buttons using their origin values from WZ data
         self.bt_claim.draw();
