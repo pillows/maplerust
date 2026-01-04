@@ -19,6 +19,7 @@ mod chat_balloon;
 mod game_menu;
 mod character_renderer;
 mod npc_dialog;
+mod npc_script;
 mod social_windows;
 
 #[macroquad::main("RustMaple")]

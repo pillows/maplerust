@@ -14,7 +14,8 @@ use crate::key_config::KeyConfig;
 use crate::chat_balloon::ChatBalloonSystem;
 use crate::game_menu::{GameMenu, MenuAction};
 use crate::character_renderer::{CharacterRenderer, CharacterState};
-use crate::npc_dialog::NpcDialogSystem;
+use crate::npc_dialog::{NpcDialogSystem, DialogType};
+use crate::npc_script::{NpcScriptEngine, NpcScriptCommand};
 use crate::social_windows::{ChannelWindow, MegaphoneWindow, MemoWindow, MessengerWindow};
 use futures;
 
@@ -78,6 +79,7 @@ pub struct GameplayState {
     game_menu: GameMenu,
     character_renderer: CharacterRenderer,
     npc_dialog: NpcDialogSystem,
+    npc_script_engine: NpcScriptEngine,
     // Social windows
     channel_window: ChannelWindow,
     megaphone_window: MegaphoneWindow,
@@ -136,6 +138,7 @@ impl GameplayState {
             game_menu: GameMenu::new(),
             character_renderer: CharacterRenderer::new(),
             npc_dialog: NpcDialogSystem::new(),
+            npc_script_engine: NpcScriptEngine::new(),
             channel_window: ChannelWindow::new(),
             megaphone_window: MegaphoneWindow::new(),
             memo_window: MemoWindow::new(),
@@ -550,6 +553,9 @@ impl GameplayState {
         // Only allow player movement when chat is not focused, menu is not open, and NPC dialog is not open
         let can_move = !self.status_bar.is_chat_focused() && !self.game_menu.is_visible() && !self.npc_dialog.is_visible();
 
+        // Track if movement was blocked by a wall (used to prevent auto-snapping to platforms)
+        let mut movement_blocked = false;
+
         // Debug: Log movement blockers
         if !can_move {
             // Draw debug info on screen
@@ -557,44 +563,126 @@ impl GameplayState {
 
         if can_move {
             // Detect vertical footholds as walls - only block movement INTO them
+            let player_half_width = 15.0;
             let player_top = self.player_y - 50.0;
             let player_bottom = self.player_y;
+            
+            // Find the foothold the player is currently standing on (if any)
+            let current_foothold = if self.on_ground {
+                map.find_foothold_at(self.player_x, self.player_y)
+            } else {
+                None
+            };
             
             let mut wall_left: Option<f32> = None;
             let mut wall_right: Option<f32> = None;
             
-            for fh in &map.footholds {
-                let dx = (fh.x2 - fh.x1).abs();
-                let dy = (fh.y2 - fh.y1).abs();
+            // Only check for walls if player is trying to move
+            let moving_left = is_key_down(KeyCode::Left) || is_key_down(KeyCode::A);
+            let moving_right = is_key_down(KeyCode::Right) || is_key_down(KeyCode::D);
+            
+            if moving_left || moving_right {
+                // Calculate where player would be after movement
+                let new_x_if_left = if moving_left { self.player_x - move_speed * clamped_dt } else { self.player_x };
+                let new_x_if_right = if moving_right { self.player_x + move_speed * clamped_dt } else { self.player_x };
                 
-                // Vertical wall: dy >> dx (much taller than wide)
-                if dy > 0 && (dx as f32 / dy as f32) < 0.1 && dy > 10 {
-                    let wall_x = ((fh.x1 + fh.x2) / 2) as f32;
-                    let wall_top = fh.y1.min(fh.y2) as f32;
-                    let wall_bottom = fh.y1.max(fh.y2) as f32;
-                    
-                    // Check vertical overlap with player
-                    if player_top < wall_bottom && player_bottom > wall_top {
-                        // Only block if moving INTO the wall, not away from it
-                        if wall_x < self.player_x && (is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)) {
-                            wall_left = Some(wall_left.map_or(wall_x, |l| l.max(wall_x)));
+                for fh in &map.footholds {
+                    // Skip the foothold the player is currently on
+                    if let Some(current_fh) = current_foothold {
+                        if fh.id == current_fh.id {
+                            continue;
                         }
-                        if wall_x > self.player_x && (is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)) {
-                            wall_right = Some(wall_right.map_or(wall_x, |r| r.min(wall_x)));
+                        
+                        // Skip vertical footholds that are connected to the current foothold
+                        // These are part of the platform structure, not barriers
+                        if fh.prev == current_fh.id || fh.next == current_fh.id ||
+                           current_fh.prev == fh.id || current_fh.next == fh.id {
+                            continue;
+                        }
+                    }
+                    
+                    let dx = (fh.x2 - fh.x1).abs();
+                    let dy = (fh.y2 - fh.y1).abs();
+                    
+                    // Vertical wall: must be very close to vertical (dx < 2px) and have significant vertical extent (dy > 15px)
+                    let is_vertical = dx < 2 && dy > 15;
+                    
+                    if is_vertical {
+                        let wall_x = ((fh.x1 + fh.x2) / 2) as f32;
+                        let wall_top = fh.y1.min(fh.y2) as f32;
+                        let wall_bottom = fh.y1.max(fh.y2) as f32;
+                        
+                        // Check if wall is in player's vertical range
+                        if player_top < wall_bottom && player_bottom > wall_top {
+                            // Wall is to the left - only block if moving left and would cross it
+                            if wall_x < self.player_x && moving_left {
+                                // Player's left edge at new position
+                                let new_left_edge = new_x_if_left - player_half_width;
+                                // Player's left edge at current position
+                                let current_left_edge = self.player_x - player_half_width;
+                                // Only block if wall is between current and new position
+                                if wall_x >= new_left_edge && wall_x < current_left_edge {
+                                    wall_left = Some(wall_left.map_or(wall_x, |l| l.max(wall_x)));
+                                }
+                            }
+                            // Wall is to the right - only block if moving right and would cross it
+                            else if wall_x > self.player_x && moving_right {
+                                // Player's right edge at new position
+                                let new_right_edge = new_x_if_right + player_half_width;
+                                // Player's right edge at current position
+                                let current_right_edge = self.player_x + player_half_width;
+                                // Only block if wall is between current and new position
+                                if wall_x <= new_right_edge && wall_x > current_right_edge {
+                                    wall_right = Some(wall_right.map_or(wall_x, |r| r.min(wall_x)));
+                                }
+                            }
                         }
                     }
                 }
             }
             
+            // Apply horizontal movement - only block if a wall is detected
             if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
                 let new_x = self.player_x - move_speed * clamped_dt;
-                let min_x = wall_left.unwrap_or(self.foothold_min_x);
-                self.player_x = new_x.max(min_x);
+                // Only block if there's a wall on the left
+                // Account for player width (half width on each side)
+                let player_half_width = 15.0;
+                if let Some(wall_x) = wall_left {
+                    // Block movement if player would cross the wall
+                    // Allow player to get close but not pass through
+                    let blocked_x = wall_x + player_half_width;
+                    if new_x < blocked_x {
+                        self.player_x = blocked_x;
+                        movement_blocked = true;
+                    } else {
+                        self.player_x = new_x;
+                    }
+                } else {
+                    // No wall detected - allow normal movement
+                    // Still respect map boundaries as a safety measure
+                    self.player_x = new_x.max(self.foothold_min_x);
+                }
             }
             if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
                 let new_x = self.player_x + move_speed * clamped_dt;
-                let max_x = wall_right.unwrap_or(self.foothold_max_x);
-                self.player_x = new_x.min(max_x);
+                // Only block if there's a wall on the right
+                // Account for player width (half width on each side)
+                let player_half_width = 15.0;
+                if let Some(wall_x) = wall_right {
+                    // Block movement if player would cross the wall
+                    // Allow player to get close but not pass through
+                    let blocked_x = wall_x - player_half_width;
+                    if new_x > blocked_x {
+                        self.player_x = blocked_x;
+                        movement_blocked = true;
+                    } else {
+                        self.player_x = new_x;
+                    }
+                } else {
+                    // No wall detected - allow normal movement
+                    // Still respect map boundaries as a safety measure
+                    self.player_x = new_x.min(self.foothold_max_x);
+                }
             }
 
             // Free-roam vertical movement (Space + Up/Down or W/S)
@@ -635,18 +723,20 @@ impl GameplayState {
         }
         
         // Handle NPC double-click interaction
-        if is_mouse_button_pressed(MouseButton::Left) {
+        // Extract NPC interaction data first to avoid borrow conflicts
+        let npc_interaction_data = if is_mouse_button_pressed(MouseButton::Left) {
             let (mouse_x, mouse_y) = mouse_position();
             let world_x = mouse_x + self.camera_x;
             let world_y = mouse_y + self.camera_y;
-            
+
             // Check if click is on an NPC
+            let mut npc_data: Option<(i32, String, Option<Texture2D>)> = None;
             for life in &map.life {
                 if life.life_type == "n" && !life.hide {
                     // Calculate NPC position (snapped to foothold if available)
                     let mut npc_x = life.x as f32;
                     let mut npc_y = life.y as f32;
-                    
+
                     if life.foothold != 0 {
                         if let Some(fh) = map.footholds.iter().find(|fh| fh.id == life.foothold) {
                             let dx = fh.x2 - fh.x1;
@@ -660,38 +750,31 @@ impl GameplayState {
                             npc_y = fh_y;
                         }
                     }
-                    
+
                     // Check if click is within NPC bounds (using texture size if available)
                     let npc_width = if let Some(tex) = &life.texture { tex.width() } else { 40.0 };
                     let npc_height = if let Some(tex) = &life.texture { tex.height() } else { 60.0 };
                     let npc_screen_x = npc_x - self.camera_x - life.origin_x as f32;
                     let npc_screen_y = npc_y - self.camera_y - life.origin_y as f32;
-                    
+
                     if mouse_x >= npc_screen_x && mouse_x <= npc_screen_x + npc_width &&
                        mouse_y >= npc_screen_y && mouse_y <= npc_screen_y + npc_height {
-                        
+
                         let current_time = get_time() as f32;
                         let double_click_threshold = 0.5; // 500ms
-                        
+
                         // Check if this is a double-click on the same NPC
                         if let Some(last_id) = &self.last_npc_click_id {
-                            if last_id == &life.id && 
+                            if last_id == &life.id &&
                                (current_time - self.last_npc_click_time) < double_click_threshold {
-                                // Double-click detected! Show NPC dialog
+                                // Double-click detected! Save NPC data
                                 info!("NPC interaction created: {} (ID: {})", life.name, life.id);
-                                
-                                // Show NPC dialog UI with sample text and NPC texture
-                                let npc_dialog_text = format!("Hello! I'm {}. How can I help you today?", 
-                                    if !life.name.is_empty() { &life.name } else { "an NPC" });
-                                self.npc_dialog.show_dialog_with_npc(&npc_dialog_text, npc_x, npc_y - life.origin_y as f32, life.texture.clone());
-                                
-                                // Reset click tracking to prevent triple-clicks from triggering again
-                                self.last_npc_click_time = -1.0;
-                                self.last_npc_click_id = None;
-                                break; // Exit immediately after double-click
+                                let npc_id = life.id.parse::<i32>().unwrap_or(0);
+                                npc_data = Some((npc_id, life.name.clone(), life.texture.clone()));
+                                break;
                             }
                         }
-                        
+
                         // Update last click info
                         self.last_npc_click_time = current_time;
                         self.last_npc_click_id = Some(life.id.clone());
@@ -699,7 +782,20 @@ impl GameplayState {
                     }
                 }
             }
-        }
+            npc_data
+        } else {
+            None
+        };
+
+        // Store NPC interaction to execute after map borrow is released
+        let pending_npc_command = if let Some((npc_id, npc_name, npc_texture)) = npc_interaction_data {
+            let cmd = self.npc_script_engine.start_npc(npc_id);
+            self.last_npc_click_time = -1.0;
+            self.last_npc_click_id = None;
+            Some((cmd, npc_name, npc_texture))
+        } else {
+            None
+        };
 
         // Portal interaction or ladder grab - Check if player is near a portal/ladder and presses Up
         if can_move && is_key_pressed(KeyCode::Up) && !free_roam {
@@ -898,9 +994,11 @@ impl GameplayState {
             self.player_y += self.player_vy * clamped_dt;
 
             // Check collision with footholds (only for vertical positioning, not horizontal limits)
+            // Don't auto-snap to platforms when movement is blocked by a wall
             if flags::ENABLE_COLLISION {
                 if !self.drop_through_platform {
                     // Simple collision: find foothold at position or below
+                    // Only snap to footholds at the player's current X position to prevent teleportation
                     if let Some(fh) = map.find_foothold_at(self.player_x, self.player_y) {
                         let fh_y = map.get_foothold_y_at(fh, self.player_x);
                         if self.player_y >= fh_y && self.player_vy >= 0.0 {
@@ -910,15 +1008,24 @@ impl GameplayState {
                         } else {
                             self.on_ground = false;
                         }
-                    } else if let Some((fh_y, _)) = map.find_foothold_below(self.player_x, self.player_y) {
-                        if self.player_vy >= 0.0 && self.player_y >= fh_y {
-                            self.player_y = fh_y;
-                            self.player_vy = 0.0;
-                            self.on_ground = true;
+                    } else if self.player_vy >= 0.0 && !movement_blocked {
+                        // Only check below if player is falling AND not blocked by a wall
+                        // This prevents auto-teleportation when hitting a wall
+                        if let Some((fh_y, _)) = map.find_foothold_below(self.player_x, self.player_y) {
+                            // Only snap if player is actually falling and close to the foothold
+                            // Don't snap if player is far above (prevents teleportation)
+                            if self.player_y >= fh_y - 5.0 {
+                                self.player_y = fh_y;
+                                self.player_vy = 0.0;
+                                self.on_ground = true;
+                            } else {
+                                self.on_ground = false;
+                            }
                         } else {
                             self.on_ground = false;
                         }
                     } else {
+                        // Player is jumping/rising or blocked by wall - don't snap to platforms
                         self.on_ground = false;
                     }
                 } else {
@@ -1103,7 +1210,30 @@ impl GameplayState {
         self.chat_balloon.update(clamped_dt);
         self.game_menu.update();
         self.npc_dialog.update();
-        
+
+        // Handle NPC dialog responses
+        use crate::npc_dialog::DialogResponse;
+        let response = self.npc_dialog.take_response();
+        if response != DialogResponse::None {
+            // Get current NPC info from last clicked NPC
+            let (npc_name, npc_texture) = if let Some(map) = &self.map_data {
+                if let Some(npc_id) = &self.last_npc_click_id {
+                    if let Some(life) = map.life.iter().find(|l| &l.id == npc_id && l.life_type == "n") {
+                        (life.name.clone(), life.texture.clone())
+                    } else {
+                        (String::new(), None)
+                    }
+                } else {
+                    (String::new(), None)
+                }
+            } else {
+                (String::new(), None)
+            };
+
+            let cmd = self.npc_script_engine.handle_response(response);
+            self.execute_script_command_with_npc(cmd, npc_name, npc_texture);
+        }
+
         // Update social windows
         self.channel_window.update();
         self.megaphone_window.update();
@@ -1213,6 +1343,11 @@ impl GameplayState {
         }
         if self.status_bar.bt_channel_clicked() {
             self.channel_window.toggle();
+        }
+
+        // Execute pending NPC command (after all map-dependent code)
+        if let Some((cmd, npc_name, npc_texture)) = pending_npc_command {
+            self.execute_script_command_with_npc(cmd, npc_name, npc_texture);
         }
     }
 
@@ -1484,24 +1619,6 @@ impl GameplayState {
         if flags::SHOW_MAP_LOADER {
             self.draw_map_loader_ui();
         }
-
-        // Controls hint at bottom (commented out to show status bar UI)
-        // let mut controls_text = "Controls: A/D or ← → to move | Alt to jump | ↑ on portal to enter".to_string();
-        // if flags::CAMERA_DEBUG_MODE {
-        //     controls_text.push_str(" | Shift+Arrows: Camera");
-        // }
-        // if DebugFlags::should_show_debug_ui() {
-        //     controls_text.push_str(" | M: Load Map");
-        // }
-        // let font_size = 16.0;
-        // let text_dimensions = measure_text(&controls_text, None, font_size as u16, 1.0);
-        // draw_text(
-        //     &controls_text,
-        //     screen_width() / 2.0 - text_dimensions.width / 2.0,
-        //     screen_height() - 20.0,
-        //     font_size,
-        //     WHITE,
-        // );
     }
 
     /// Draw the debug map loader UI
@@ -1582,6 +1699,62 @@ impl GameplayState {
         // Show loading indicator
         if self.loading_new_map {
             draw_text("Loading...", box_x + box_width - 80.0, box_y + 25.0, 16.0, YELLOW);
+        }
+    }
+
+    /// Execute NPC script command with NPC info
+    fn execute_script_command_with_npc(&mut self, cmd: NpcScriptCommand, npc_name: String, npc_texture: Option<Texture2D>) {
+        match cmd {
+            NpcScriptCommand::ShowDialog { text, dialog_type } => {
+                self.npc_dialog.show_dialog_typed(
+                    &text,
+                    &npc_name,
+                    npc_texture,
+                    dialog_type
+                );
+            }
+            NpcScriptCommand::ShowSelection { text, options } => {
+                self.npc_dialog.show_selection(
+                    &text,
+                    &npc_name,
+                    npc_texture,
+                    options
+                );
+            }
+            NpcScriptCommand::Close => {
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::GiveItem(id, qty) => {
+                info!("Script: Give item {} x{}", id, qty);
+                // TODO: Implement inventory system interaction
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::GiveMeso(amount) => {
+                info!("Script: Give {} meso", amount);
+                // TODO: Implement meso addition
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::GiveExp(amount) => {
+                info!("Script: Give {} exp", amount);
+                // TODO: Implement exp addition
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::TakeItem(id, qty) => {
+                info!("Script: Take item {} x{}", id, qty);
+                // TODO: Implement inventory system interaction
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::Warp(map_id) => {
+                info!("Script: Warp to map {}", map_id);
+                // TODO: Implement map warp
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::ShowStyle { text, style_type, available_styles } => {
+                info!("Script: Show style dialog {:?} with {} options", style_type, available_styles.len());
+                // TODO: Implement style dialog in Phase 4
+                self.npc_dialog.close_dialog();
+            }
+            NpcScriptCommand::None => {}
         }
     }
 }
