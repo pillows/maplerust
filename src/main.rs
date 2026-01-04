@@ -18,6 +18,7 @@ mod key_config;
 mod chat_balloon;
 mod game_menu;
 mod character_renderer;
+mod physics;
 mod npc_dialog;
 mod npc_script;
 mod social_windows;

@@ -5,7 +5,7 @@
 pub const SKIP_LOGOS: bool = true;
 
 /// Skip login screen and go directly to character selection
-pub const SKIP_LOGIN: bool = false;
+pub const SKIP_LOGIN: bool = true;
 
 /// Skip all screens and go directly to gameplay with first available character
 pub const SKIP_TO_GAME: bool = true;

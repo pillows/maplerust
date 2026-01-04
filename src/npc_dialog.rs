@@ -7,14 +7,17 @@ use wz_reader::{WzImage, WzNode, WzNodeArc, WzReader, WzNodeCast};
 const UIWINDOW2_URL: &str = "https://scribbles-public.s3.us-east-1.amazonaws.com/tutorial/01/UI/UIWindow2.img";
 const UIWINDOW2_CACHE: &str = "/01/UI/UIWindow2.img";
 
-/// Dialog type determines UI layout and available buttons
+/// Dialog type determines UI layout and available buttons (matches C++ TalkType enum)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DialogType {
-    Ok,              // OK button only
-    Next,            // Next button only
-    YesNo,           // Yes + No buttons
-    AcceptDecline,   // Accept + Decline buttons (same as YesNo visually)
-    Selection,       // List of selectable options + OK button
+    Ok,              // SENDOK - OK button only
+    YesNo,           // SENDYESNO - Yes + No buttons
+    Next,            // SENDNEXT - Next button only
+    NextPrev,        // SENDNEXTPREV - Next + Prev buttons
+    AcceptDecline,   // SENDACCEPTDECLINE - Quest accept/decline
+    GetText,         // SENDGETTEXT - Text input
+    GetNumber,       // SENDGETNUMBER - Number input
+    Selection,       // SENDSIMPLE - List of selectable options
     Style,           // Style preview + OK/Cancel buttons
 }
 
@@ -26,6 +29,7 @@ pub enum DialogResponse {
     Yes,
     No,
     Next,
+    Prev,
     Accept,
     Decline,
     Selection(usize),  // Index of selected option
@@ -72,6 +76,12 @@ pub struct NpcDialogSystem {
     tex_c: Option<Texture2D>,
     tex_s: Option<Texture2D>,
     tex_bar: Option<Texture2D>,  // Name tag bar
+    // Texture dimensions for positioning
+    t_height: f32,
+    c_height: f32,
+    s_height: f32,
+    t_width: f32,
+    bar_width: f32,
     // Buttons
     btn_ok: DialogButton,
     btn_prev: DialogButton,
@@ -79,6 +89,9 @@ pub struct NpcDialogSystem {
     btn_close: DialogButton,
     btn_yes: DialogButton,
     btn_no: DialogButton,
+    // Quest-specific buttons
+    btn_qyes: DialogButton,
+    btn_qno: DialogButton,
     // Dialog state
     active_dialog: Option<ActiveNpcDialog>,
     dialog_type: DialogType,
@@ -109,12 +122,19 @@ impl NpcDialogSystem {
             tex_c: None,
             tex_s: None,
             tex_bar: None,
+            t_height: 0.0,
+            c_height: 0.0,
+            s_height: 0.0,
+            t_width: 0.0,
+            bar_width: 0.0,
             btn_ok: DialogButton::default(),
             btn_prev: DialogButton::default(),
             btn_next: DialogButton::default(),
             btn_close: DialogButton::default(),
             btn_yes: DialogButton::default(),
             btn_no: DialogButton::default(),
+            btn_qyes: DialogButton::default(),
+            btn_qno: DialogButton::default(),
             active_dialog: None,
             dialog_type: DialogType::Ok,
             npc_name: String::new(),
@@ -151,16 +171,27 @@ impl NpcDialogSystem {
                     self.tex_s = Self::load_tex(&root_node, "UtilDlgEx/s").await;
                     self.tex_bar = Self::load_tex(&root_node, "UtilDlgEx/bar").await;
 
+                    // Store dimensions for positioning calculations
+                    self.t_height = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(26.0);
+                    self.c_height = self.tex_c.as_ref().map(|t| t.height()).unwrap_or(14.0);
+                    self.s_height = self.tex_s.as_ref().map(|t| t.height()).unwrap_or(26.0);
+                    self.t_width = self.tex_t.as_ref().map(|t| t.width()).unwrap_or(510.0);
+                    self.bar_width = self.tex_bar.as_ref().map(|t| t.width()).unwrap_or(100.0);
+
                     self.btn_ok = Self::load_button(&root_node, "UtilDlgEx/BtOK").await;
                     self.btn_prev = Self::load_button(&root_node, "UtilDlgEx/BtPrev").await;
                     self.btn_next = Self::load_button(&root_node, "UtilDlgEx/BtNext").await;
                     self.btn_close = Self::load_button(&root_node, "UtilDlgEx/BtClose").await;
                     self.btn_yes = Self::load_button(&root_node, "UtilDlgEx/BtYes").await;
                     self.btn_no = Self::load_button(&root_node, "UtilDlgEx/BtNo").await;
+                    // Quest-specific buttons
+                    self.btn_qyes = Self::load_button(&root_node, "UtilDlgEx/BtQYes").await;
+                    self.btn_qno = Self::load_button(&root_node, "UtilDlgEx/BtQNo").await;
 
                     self.loaded = true;
-                    info!("NPC dialog loaded: t={}, c={}, s={}, bar={}",
-                        self.tex_t.is_some(), self.tex_c.is_some(), self.tex_s.is_some(), self.tex_bar.is_some());
+                    info!("NPC dialog loaded: t={}, c={}, s={}, bar={}, dims=({},{},{},{})",
+                        self.tex_t.is_some(), self.tex_c.is_some(), self.tex_s.is_some(), self.tex_bar.is_some(),
+                        self.t_width, self.t_height, self.c_height, self.s_height);
                 }
             }
         }
@@ -250,31 +281,30 @@ impl NpcDialogSystem {
     /// Center dialog on screen (from C++ line 446)
     /// position = Point(400 - top.width() / 2, 240 - height / 2)
     fn center_on_screen(&mut self) {
-        let top_width = self.tex_t.as_ref().map(|t| t.width()).unwrap_or(400.0);
-        let fill_height = self.tex_c.as_ref().map(|t| t.height()).unwrap_or(14.0);
-        let content_height = self.vtile as f32 * fill_height;
+        let content_height = self.vtile as f32 * self.c_height;
+        // C++ uses 800x600 center (400, 240) as reference point
+        self.x = 400.0 - self.t_width / 2.0;
+        self.y = 240.0 - content_height / 2.0;
+    }
 
-        // Use 800x480 center (400, 240) as reference point
-        let center_x = 400.0;
-        let center_y = 240.0;
+    /// Get the content height (middle section)
+    fn get_content_height(&self) -> f32 {
+        self.vtile as f32 * self.c_height
+    }
 
-        self.x = center_x - top_width / 2.0;
-        self.y = center_y - content_height / 2.0;
+    /// Get the total dialog height
+    fn get_total_height(&self) -> f32 {
+        self.t_height + self.get_content_height() + self.s_height
     }
 
     pub fn update(&mut self) {
         if !self.is_visible() { return; }
 
-        let width = 350.0;
-        let t_h = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(10.0);
-        let c_h = self.tex_c.as_ref().map(|t| t.height()).unwrap_or(14.0);
-        let s_h = self.tex_s.as_ref().map(|t| t.height()).unwrap_or(10.0);
+        let content_height = self.get_content_height();
+        let total_height = self.get_total_height();
 
-        // Dynamic height based on vtile
-        let content_height = self.vtile as f32 * c_h;
-        let total_height = t_h + content_height + s_h;
-
-        // Button base position (from C++: y_cord = height + 48)
+        // Button base Y position (from C++: y_cord = height + 48)
+        // height in C++ is content_height (the middle section)
         let y_cord = content_height + 48.0;
         let btn_base_y = self.y + y_cord;
 
@@ -291,69 +321,87 @@ impl NpcDialogSystem {
             mx >= x && mx <= x + w && my >= y && my <= y + h
         };
 
-        // Always check Close button (index 100, at x=9)
+        // Always check Close button (index 100, at x=9) - C++ line 412
         if check_btn_bounds(&self.btn_close, self.x + 9.0, btn_base_y) {
-            self.btn_hovered = 100; // Close button
+            self.btn_hovered = 100;
             if is_mouse_button_down(MouseButton::Left) {
                 self.btn_pressed = 100;
             }
         }
 
         match self.dialog_type {
-            DialogType::Ok | DialogType::Next => {
-                // Single button at x=471
-                let btn = if self.dialog_type == DialogType::Ok { &self.btn_ok } else { &self.btn_next };
-                if check_btn_bounds(btn, self.x + 471.0, btn_base_y) {
+            DialogType::Ok => {
+                // OK button at x=471 (C++ line 419)
+                if check_btn_bounds(&self.btn_ok, self.x + 471.0, btn_base_y) {
                     self.btn_hovered = 0;
-                    if is_mouse_button_down(MouseButton::Left) {
-                        self.btn_pressed = 0;
-                    }
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
                 }
             }
-            DialogType::YesNo | DialogType::AcceptDecline => {
-                // Two buttons: Yes at x=389, No at x=454
+            DialogType::Next => {
+                // Next button at x=471
+                if check_btn_bounds(&self.btn_next, self.x + 471.0, btn_base_y) {
+                    self.btn_hovered = 0;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
+                }
+            }
+            DialogType::NextPrev => {
+                // Next at x=471, Prev at x=389
+                if check_btn_bounds(&self.btn_next, self.x + 471.0, btn_base_y) {
+                    self.btn_hovered = 0;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
+                } else if check_btn_bounds(&self.btn_prev, self.x + 389.0, btn_base_y) {
+                    self.btn_hovered = 1;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 1; }
+                }
+            }
+            DialogType::YesNo => {
+                // Yes at x=389, No at x=454 (389 + 65) - C++ lines 427, 430
                 if check_btn_bounds(&self.btn_yes, self.x + 389.0, btn_base_y) {
-                    self.btn_hovered = 0; // Yes/Accept button
-                    if is_mouse_button_down(MouseButton::Left) {
-                        self.btn_pressed = 0;
-                    }
+                    self.btn_hovered = 0;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
                 } else if check_btn_bounds(&self.btn_no, self.x + 454.0, btn_base_y) {
-                    self.btn_hovered = 1; // No/Decline button
-                    if is_mouse_button_down(MouseButton::Left) {
-                        self.btn_pressed = 1;
-                    }
+                    self.btn_hovered = 1;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 1; }
+                }
+            }
+            DialogType::AcceptDecline => {
+                // Quest Yes/No buttons at same positions
+                if check_btn_bounds(&self.btn_qyes, self.x + 389.0, btn_base_y) {
+                    self.btn_hovered = 0;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
+                } else if check_btn_bounds(&self.btn_qno, self.x + 454.0, btn_base_y) {
+                    self.btn_hovered = 1;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 1; }
                 }
             }
             DialogType::Selection => {
-                // Selection list + OK button at x=471
-                // TODO: Handle selection list click
+                // OK button at x=471
                 if check_btn_bounds(&self.btn_ok, self.x + 471.0, btn_base_y) {
                     self.btn_hovered = 0;
-                    if is_mouse_button_down(MouseButton::Left) {
-                        self.btn_pressed = 0;
-                    }
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
+                }
+            }
+            DialogType::GetText | DialogType::GetNumber => {
+                // OK button at x=471
+                if check_btn_bounds(&self.btn_ok, self.x + 471.0, btn_base_y) {
+                    self.btn_hovered = 0;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
                 }
             }
             DialogType::Style => {
-                // Style preview + OK at x=471, Cancel at x=389
-                // TODO: Handle style arrows
+                // OK at x=471, Cancel (No) at x=389
                 if check_btn_bounds(&self.btn_ok, self.x + 471.0, btn_base_y) {
                     self.btn_hovered = 0;
-                    if is_mouse_button_down(MouseButton::Left) {
-                        self.btn_pressed = 0;
-                    }
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 0; }
                 } else if check_btn_bounds(&self.btn_no, self.x + 389.0, btn_base_y) {
-                    self.btn_hovered = 1; // Cancel
-                    if is_mouse_button_down(MouseButton::Left) {
-                        self.btn_pressed = 1;
-                    }
+                    self.btn_hovered = 1;
+                    if is_mouse_button_down(MouseButton::Left) { self.btn_pressed = 1; }
                 }
             }
         }
 
         // Handle button click
         if is_mouse_button_released(MouseButton::Left) && self.btn_hovered >= 0 {
-            // Close button clicked (index 100) - always closes dialog
             if self.btn_hovered == 100 {
                 self.last_response = DialogResponse::None;
                 self.close_dialog();
@@ -363,18 +411,21 @@ impl NpcDialogSystem {
             self.last_response = match (self.dialog_type, self.btn_hovered) {
                 (DialogType::Ok, 0) => DialogResponse::Ok,
                 (DialogType::Next, 0) => DialogResponse::Next,
+                (DialogType::NextPrev, 0) => DialogResponse::Next,
+                (DialogType::NextPrev, 1) => DialogResponse::Prev,
                 (DialogType::YesNo, 0) => DialogResponse::Yes,
                 (DialogType::YesNo, 1) => DialogResponse::No,
                 (DialogType::AcceptDecline, 0) => DialogResponse::Accept,
                 (DialogType::AcceptDecline, 1) => DialogResponse::Decline,
                 (DialogType::Selection, 0) => DialogResponse::Selection(self.selected_index),
-                (DialogType::Style, 0) => DialogResponse::Style(0), // TODO: Actual style ID
-                (DialogType::Style, 1) => DialogResponse::None, // Cancel
+                (DialogType::GetText, 0) | (DialogType::GetNumber, 0) => DialogResponse::Ok,
+                (DialogType::Style, 0) => DialogResponse::Style(0),
+                (DialogType::Style, 1) => DialogResponse::None,
                 _ => DialogResponse::None,
             };
 
-            // Don't close for Next dialog - let script handle it
-            if self.dialog_type != DialogType::Next {
+            // Don't close for Next/NextPrev dialogs - let script handle it
+            if !matches!(self.dialog_type, DialogType::Next | DialogType::NextPrev) {
                 self.close_dialog();
             }
             return;
@@ -383,12 +434,12 @@ impl NpcDialogSystem {
         // Keyboard shortcuts
         if is_key_pressed(KeyCode::Enter) {
             self.last_response = match self.dialog_type {
-                DialogType::Ok => DialogResponse::Ok,
-                DialogType::Next => DialogResponse::Next,
+                DialogType::Ok | DialogType::GetText | DialogType::GetNumber => DialogResponse::Ok,
+                DialogType::Next | DialogType::NextPrev => DialogResponse::Next,
                 DialogType::Selection => DialogResponse::Selection(self.selected_index),
                 _ => DialogResponse::None,
             };
-            if self.dialog_type != DialogType::Next {
+            if !matches!(self.dialog_type, DialogType::Next | DialogType::NextPrev) {
                 self.close_dialog();
             }
             return;
@@ -400,11 +451,12 @@ impl NpcDialogSystem {
             return;
         }
 
-        // Handle dragging only on top area
-        let is_in_drag_area = mx >= self.x && mx <= self.x + width
-            && my >= self.y && my <= self.y + t_h;
-
-        if is_mouse_button_pressed(MouseButton::Left) && is_in_drag_area && self.btn_hovered < 0 {
+        // Handle dragging
+        let is_in_dialog = mx >= self.x && mx <= self.x + self.t_width
+            && my >= self.y && my <= self.y + total_height;
+        let clicking_button = self.btn_pressed >= 0;
+        
+        if is_mouse_button_pressed(MouseButton::Left) && is_in_dialog && !clicking_button {
             self.is_dragging = true;
             self.drag_offset_x = mx - self.x;
             self.drag_offset_y = my - self.y;
@@ -427,11 +479,9 @@ impl NpcDialogSystem {
             _ => return,
         };
 
-        let width = 350.0;
-
-        let t_h = self.tex_t.as_ref().map(|t| t.height()).unwrap_or(10.0);
-        let c_h = self.tex_c.as_ref().map(|t| t.height()).unwrap_or(14.0);
-        let s_h = self.tex_s.as_ref().map(|t| t.height()).unwrap_or(10.0);
+        let content_height = self.get_content_height();
+        let total_height = self.get_total_height();
+        let min_height = 8.0 * self.c_height + 14.0;
 
         let has_textures = self.tex_t.is_some() && self.tex_c.is_some() && self.tex_s.is_some();
 
@@ -441,13 +491,13 @@ impl NpcDialogSystem {
                 draw_texture(t, self.x, self.y, WHITE);
             }
 
-            // Draw FILL (middle) - repeat vtile times (dynamic)
-            let mut y = self.y + t_h;
+            // Draw FILL (middle) - repeat vtile times
+            let mut y = self.y + self.t_height;
             for _ in 0..self.vtile {
                 if let Some(c) = &self.tex_c {
                     draw_texture(c, self.x, y, WHITE);
                 }
-                y += c_h;
+                y += self.c_height;
             }
 
             // Draw BOTTOM
@@ -455,27 +505,29 @@ impl NpcDialogSystem {
                 draw_texture(s, self.x, y, WHITE);
             }
 
-            let content_height = self.vtile as f32 * c_h;
-            let total_height = t_h + content_height + s_h;
-            let min_height = 8.0 * c_h + 14.0;
-
-            // Calculate speaker position - centered vertically in ENTIRE window (from C++ line 88-90)
+            // Calculate speaker position (from C++ lines 88-94)
             // speaker_y = (top.height() + height + bottom.height()) / 2
             // speaker_pos = position + Point(22, 11 + speaker_y)
-            let speaker_y = (t_h + content_height + s_h) / 2.0;
+            // center_pos = speaker_pos + Point(nametag.width() / 2, 0)
+            let speaker_y = total_height / 2.0;
             let speaker_pos_x = self.x + 22.0;
             let speaker_pos_y = self.y + 11.0 + speaker_y;
+            let center_x = speaker_pos_x + self.bar_width / 2.0;
 
-            // Get nametag width for centering
-            let nametag_width = self.tex_bar.as_ref().map(|t| t.width()).unwrap_or(100.0);
-            let center_x = speaker_pos_x + nametag_width / 2.0;
+            // Draw NPC speaker at center_pos with centered drawing (C++ line 92)
+            // DrawArgument(center_pos, true) means center the sprite
+            if let Some(npc_tex) = &dialog.npc_texture {
+                let npc_x = center_x - npc_tex.width() / 2.0;
+                let npc_y = speaker_pos_y - npc_tex.height() / 2.0;
+                draw_texture(npc_tex, npc_x, npc_y, WHITE);
+            }
 
-            // Draw name tag bar at speaker_pos (from C++ line 93)
+            // Draw name tag bar at speaker_pos (C++ line 93)
             if let Some(bar) = &self.tex_bar {
                 draw_texture(bar, speaker_pos_x, speaker_pos_y, WHITE);
             }
 
-            // Draw NPC name at center_pos + Point(0, -4) (from C++ line 94)
+            // Draw NPC name at center_pos + Point(0, -4) (C++ line 94)
             if !self.npc_name.is_empty() {
                 let name_width = if let Some(font) = &self.font {
                     measure_text(&self.npc_name, Some(font), 11, 1.0).width
@@ -483,24 +535,18 @@ impl NpcDialogSystem {
                     measure_text(&self.npc_name, None, 11, 1.0).width
                 };
 
+                let name_x = center_x - name_width / 2.0;
+                let name_y = speaker_pos_y - 4.0;
                 if let Some(font) = &self.font {
-                    draw_text_ex(&self.npc_name, center_x - name_width / 2.0, speaker_pos_y - 4.0,
+                    draw_text_ex(&self.npc_name, name_x, name_y,
                                  TextParams { font: Some(font), font_size: 11, color: WHITE, ..Default::default() });
                 } else {
-                    draw_text(&self.npc_name, center_x - name_width / 2.0, speaker_pos_y - 4.0, 11.0, WHITE);
+                    draw_text(&self.npc_name, name_x, name_y, 11.0, WHITE);
                 }
             }
 
-            // Draw NPC speaker at center_pos with centered drawing (from C++ line 92)
-            if let Some(npc_tex) = &dialog.npc_texture {
-                // Center the NPC texture horizontally and vertically
-                let npc_x = center_x - npc_tex.width() / 2.0;
-                let npc_y = speaker_pos_y - npc_tex.height() / 2.0;
-                draw_texture(npc_tex, npc_x, npc_y, WHITE);
-            }
-
             // Draw text at x + 166, y + 48 - y_adj (from C++ line 105)
-            // y_adj = height - min_height
+            // y_adj = height - min_height (when not using slider)
             let text_x = self.x + 166.0;
             let y_adj = content_height - min_height;
             let text_y = self.y + 48.0 - y_adj;
@@ -529,40 +575,47 @@ impl NpcDialogSystem {
             self.btn_close.draw(self.x + 9.0, btn_base_y, self.btn_hovered == 100, self.btn_pressed == 100);
 
             match self.dialog_type {
-                DialogType::Ok => {
+                DialogType::Ok | DialogType::GetText | DialogType::GetNumber => {
                     // OK button at x=471 (C++ line 419)
                     self.btn_ok.draw(self.x + 471.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
                 }
                 DialogType::Next => {
-                    // Next button at x=471 (same position as OK)
+                    // Next button at x=471
                     self.btn_next.draw(self.x + 471.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
                 }
-                DialogType::YesNo | DialogType::AcceptDecline => {
-                    // Yes button at x=389 (C++ line 427)
+                DialogType::NextPrev => {
+                    // Next at x=471, Prev at x=389
+                    self.btn_next.draw(self.x + 471.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
+                    self.btn_prev.draw(self.x + 389.0, btn_base_y, self.btn_hovered == 1, self.btn_pressed == 1);
+                }
+                DialogType::YesNo => {
+                    // Yes at x=389, No at x=454 (389 + 65) (C++ lines 427, 430)
                     self.btn_yes.draw(self.x + 389.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
-                    // No button at x=454 (389 + 65, C++ line 430)
                     self.btn_no.draw(self.x + 454.0, btn_base_y, self.btn_hovered == 1, self.btn_pressed == 1);
                 }
+                DialogType::AcceptDecline => {
+                    // Quest Yes/No at same positions
+                    self.btn_qyes.draw(self.x + 389.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
+                    self.btn_qno.draw(self.x + 454.0, btn_base_y, self.btn_hovered == 1, self.btn_pressed == 1);
+                }
                 DialogType::Selection => {
-                    // Selection list rendering - TODO: Implement in Phase 3
-                    // For now, just show OK button
+                    // OK button at x=471
                     self.btn_ok.draw(self.x + 471.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
                 }
                 DialogType::Style => {
-                    // Style preview - TODO: Implement in Phase 4
-                    // For now, show OK/Cancel buttons
+                    // OK at x=471, Cancel (No) at x=389
                     self.btn_ok.draw(self.x + 471.0, btn_base_y, self.btn_hovered == 0, self.btn_pressed == 0);
                     self.btn_no.draw(self.x + 389.0, btn_base_y, self.btn_hovered == 1, self.btn_pressed == 1);
                 }
             }
 
         } else {
-            // Fallback rendering
+            // Fallback rendering when textures not loaded
+            let width = 350.0;
             let height = 150.0;
             draw_rectangle(self.x, self.y, width, height, Color::from_rgba(245, 235, 210, 255));
             draw_rectangle_lines(self.x, self.y, width, height, 2.0, Color::from_rgba(139, 90, 43, 255));
 
-            // NPC avatar
             let text_x = if let Some(npc_tex) = &dialog.npc_texture {
                 draw_texture(npc_tex, self.x + 20.0, self.y + 20.0, WHITE);
                 self.x + 100.0
@@ -570,7 +623,6 @@ impl NpcDialogSystem {
                 self.x + 20.0
             };
 
-            // Text
             let lines = self.wrap_text(&dialog.text, 200.0, 12.0);
             let mut ty = self.y + 30.0;
             for line in &lines {
@@ -578,37 +630,27 @@ impl NpcDialogSystem {
                 ty += 16.0;
             }
 
-            // Buttons based on dialog type
             let btn_y = self.y + height - 30.0;
-            let btn_hovered_0 = self.btn_hovered == 0;
-            let btn_pressed_0 = self.btn_pressed == 0;
-
             let btn_color = |hovered: bool, pressed: bool| {
-                if pressed {
-                    Color::from_rgba(180, 140, 80, 255)
-                } else if hovered {
-                    Color::from_rgba(220, 180, 120, 255)
-                } else {
-                    Color::from_rgba(200, 160, 100, 255)
-                }
+                if pressed { Color::from_rgba(180, 140, 80, 255) }
+                else if hovered { Color::from_rgba(220, 180, 120, 255) }
+                else { Color::from_rgba(200, 160, 100, 255) }
             };
 
             match self.dialog_type {
-                DialogType::Ok | DialogType::Next => {
+                DialogType::Ok | DialogType::Next | DialogType::GetText | DialogType::GetNumber => {
                     let btn_x = self.x + width - 60.0;
                     let label = if self.dialog_type == DialogType::Ok { "OK" } else { "Next" };
-                    draw_rectangle(btn_x, btn_y, 50.0, 20.0, btn_color(btn_hovered_0, btn_pressed_0));
+                    draw_rectangle(btn_x, btn_y, 50.0, 20.0, btn_color(self.btn_hovered == 0, self.btn_pressed == 0));
                     draw_rectangle_lines(btn_x, btn_y, 50.0, 20.0, 1.0, Color::from_rgba(139, 90, 43, 255));
                     draw_text(label, btn_x + 12.0, btn_y + 14.0, 14.0, BLACK);
                 }
                 DialogType::YesNo | DialogType::AcceptDecline => {
                     let yes_x = self.x + 10.0;
                     let no_x = self.x + width - 60.0;
-                    // Yes
                     draw_rectangle(yes_x, btn_y, 50.0, 20.0, btn_color(self.btn_hovered == 0, self.btn_pressed == 0));
                     draw_rectangle_lines(yes_x, btn_y, 50.0, 20.0, 1.0, Color::from_rgba(139, 90, 43, 255));
                     draw_text("Yes", yes_x + 14.0, btn_y + 14.0, 14.0, BLACK);
-                    // No
                     draw_rectangle(no_x, btn_y, 50.0, 20.0, btn_color(self.btn_hovered == 1, self.btn_pressed == 1));
                     draw_rectangle_lines(no_x, btn_y, 50.0, 20.0, 1.0, Color::from_rgba(139, 90, 43, 255));
                     draw_text("No", no_x + 16.0, btn_y + 14.0, 14.0, BLACK);

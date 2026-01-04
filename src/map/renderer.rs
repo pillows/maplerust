@@ -177,127 +177,118 @@ impl MapRenderer {
     }
 
     /// Render tiles and objects interleaved by layer for proper z-ordering
+    /// Following C++ Stage::draw() pattern: iterate layers 0-7, draw tiles+objects per layer
     fn render_tiles_and_objects(&self, map: &MapData, camera_x: f32, camera_y: f32) {
-        // Get screen dimensions for culling
         let screen_w = screen_width();
         let screen_h = screen_height();
 
-        // Collect all renderable items with their z values for proper sorting
-        #[derive(Debug)]
-        struct RenderItem {
-            z: i32,  // Combined z value (layer * 10000 + z_m for proper sorting)
-            y: i32,  // Y position for secondary sorting
-            is_tile: bool,
-            index: usize,
-        }
-
-        let mut render_items: Vec<RenderItem> = Vec::new();
-        
-        // Add tiles with their z values
-        for (i, tile) in map.tiles.iter().enumerate() {
-            // Use layer as primary sort, z_m as secondary
-            // Multiply layer by large number to ensure layer separation
-            let z = tile.layer * 10000 + tile.z_m;
-            render_items.push(RenderItem {
-                z,
-                y: tile.y,
-                is_tile: true,
-                index: i,
-            });
-        }
-        
-        // Add objects with their z values
-        for (i, obj) in map.objects.iter().enumerate() {
-            // Use layer as primary sort, z_m as secondary, z as tertiary
-            let z = obj.layer * 10000 + obj.z_m * 100 + obj.z;
-            render_items.push(RenderItem {
-                z,
-                y: obj.y,
-                is_tile: false,
-                index: i,
-            });
-        }
-        
-        // Sort by z value, then by Y position (lower Y = rendered first/behind)
-        render_items.sort_by(|a, b| {
-            let z_cmp = a.z.cmp(&b.z);
-            if z_cmp != std::cmp::Ordering::Equal {
-                z_cmp
-            } else {
-                // If z values are equal, sort by Y position (lower Y = rendered first/behind)
-                a.y.cmp(&b.y)
+        // Iterate through layers 0-7 (like C++ Layer::IDs)
+        for layer in 0..8 {
+            // Collect items for this layer only
+            struct RenderItem {
+                z: i32,      // z value within layer (from tile z_m or obj z)
+                y: i32,      // Y position for secondary sorting
+                is_tile: bool,
+                index: usize,
             }
-        });
 
-        // Render items in sorted order
-        for item in &render_items {
-            if item.is_tile {
-                let tile = &map.tiles[item.index];
-                let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
-                let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
+            let mut layer_items: Vec<RenderItem> = Vec::new();
 
-                // Get texture dimensions for proper culling
-                let (tex_w, tex_h) = if let Some(tex) = &tile.texture {
-                    (tex.width(), tex.height())
-                } else {
-                    (90.0, 60.0) // Default placeholder size
-                };
-
-                // Screen culling - check if ANY part of the texture is visible
-                // Texture is visible if its right edge is past left screen edge
-                // AND its left edge is before right screen edge (same for vertical)
-                if screen_x + tex_w < 0.0 || screen_x > screen_w
-                    || screen_y + tex_h < 0.0 || screen_y > screen_h {
-                    continue;
+            // Add tiles for this layer
+            for (i, tile) in map.tiles.iter().enumerate() {
+                if tile.layer == layer {
+                    layer_items.push(RenderItem {
+                        z: tile.z_m,
+                        y: tile.y,
+                        is_tile: true,
+                        index: i,
+                    });
                 }
+            }
 
-                if let Some(texture) = &tile.texture {
-                    draw_texture(texture, screen_x, screen_y, WHITE);
-
-                    if flags::SHOW_DEBUG_UI {
-                        let info = format!("T{}: {}/{}", tile.id, tile.u, tile.no);
-                        draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, YELLOW);
-                    }
-                } else if flags::SHOW_DEBUG_UI {
-                    draw_rectangle(screen_x, screen_y, 90.0, 60.0, Color::from_rgba(100, 50, 0, 100));
-                    let info = format!("T{}", tile.id);
-                    draw_text(&info, screen_x + 5.0, screen_y + 30.0, 12.0, RED);
+            // Add objects for this layer
+            for (i, obj) in map.objects.iter().enumerate() {
+                if obj.layer == layer {
+                    // Objects use z field for ordering within layer
+                    layer_items.push(RenderItem {
+                        z: obj.z,
+                        y: obj.y,
+                        is_tile: false,
+                        index: i,
+                    });
                 }
-            } else {
-                let obj = &map.objects[item.index];
-                let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
-                let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
+            }
 
-                // Get texture dimensions for proper culling
-                let (tex_w, tex_h) = if let Some(tex) = &obj.texture {
-                    (tex.width(), tex.height())
-                } else {
-                    (10.0, 10.0) // Default placeholder size
-                };
-
-                // Screen culling - check if ANY part of the texture is visible
-                if screen_x + tex_w < 0.0 || screen_x > screen_w
-                    || screen_y + tex_h < 0.0 || screen_y > screen_h {
-                    continue;
+            // Sort by z value within layer, then by Y
+            layer_items.sort_by(|a, b| {
+                match a.z.cmp(&b.z) {
+                    std::cmp::Ordering::Equal => a.y.cmp(&b.y),
+                    other => other,
                 }
+            });
 
-                if let Some(texture) = &obj.texture {
-                    let params = DrawTextureParams {
-                        flip_x: obj.f,
-                        flip_y: false,
-                        rotation: (obj.r as f32).to_radians(),
-                        ..Default::default()
+            // Render items for this layer
+            for item in &layer_items {
+                if item.is_tile {
+                    let tile = &map.tiles[item.index];
+                    let screen_x = tile.x as f32 - camera_x - tile.origin_x as f32;
+                    let screen_y = tile.y as f32 - camera_y - tile.origin_y as f32;
+
+                    let (tex_w, tex_h) = if let Some(tex) = &tile.texture {
+                        (tex.width(), tex.height())
+                    } else {
+                        (90.0, 60.0)
                     };
-                    draw_texture_ex(texture, screen_x, screen_y, WHITE, params);
 
-                    if flags::SHOW_DEBUG_UI {
-                        let info = format!("O{}: {}", obj.id, obj.oS);
-                        draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, ORANGE);
+                    // Screen culling
+                    if screen_x + tex_w < 0.0 || screen_x > screen_w
+                        || screen_y + tex_h < 0.0 || screen_y > screen_h {
+                        continue;
                     }
-                } else if flags::SHOW_DEBUG_UI {
-                    draw_circle(screen_x, screen_y, 5.0, Color::from_rgba(255, 165, 0, 150));
-                    let info = format!("O{}", obj.id);
-                    draw_text(&info, screen_x + 10.0, screen_y + 5.0, 12.0, ORANGE);
+
+                    if let Some(texture) = &tile.texture {
+                        draw_texture(texture, screen_x, screen_y, WHITE);
+
+                        if flags::SHOW_DEBUG_UI {
+                            let info = format!("T{}:L{}z{}", tile.id, layer, tile.z_m);
+                            draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, YELLOW);
+                        }
+                    } else if flags::SHOW_DEBUG_UI {
+                        draw_rectangle(screen_x, screen_y, 90.0, 60.0, Color::from_rgba(100, 50, 0, 100));
+                    }
+                } else {
+                    let obj = &map.objects[item.index];
+                    let screen_x = obj.x as f32 - camera_x - obj.origin_x as f32;
+                    let screen_y = obj.y as f32 - camera_y - obj.origin_y as f32;
+
+                    let (tex_w, tex_h) = if let Some(tex) = &obj.texture {
+                        (tex.width(), tex.height())
+                    } else {
+                        (10.0, 10.0)
+                    };
+
+                    // Screen culling
+                    if screen_x + tex_w < 0.0 || screen_x > screen_w
+                        || screen_y + tex_h < 0.0 || screen_y > screen_h {
+                        continue;
+                    }
+
+                    if let Some(texture) = &obj.texture {
+                        let params = DrawTextureParams {
+                            flip_x: obj.f,
+                            flip_y: false,
+                            rotation: (obj.r as f32).to_radians(),
+                            ..Default::default()
+                        };
+                        draw_texture_ex(texture, screen_x, screen_y, WHITE, params);
+
+                        if flags::SHOW_DEBUG_UI {
+                            let info = format!("O{}:L{}z{}", obj.id, layer, obj.z);
+                            draw_text(&info, screen_x + 5.0, screen_y + 15.0, 12.0, ORANGE);
+                        }
+                    } else if flags::SHOW_DEBUG_UI {
+                        draw_circle(screen_x, screen_y, 5.0, Color::from_rgba(255, 165, 0, 150));
+                    }
                 }
             }
         }

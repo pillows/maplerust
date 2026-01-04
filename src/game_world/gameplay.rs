@@ -17,6 +17,7 @@ use crate::character_renderer::{CharacterRenderer, CharacterState};
 use crate::npc_dialog::{NpcDialogSystem, DialogType};
 use crate::npc_script::{NpcScriptEngine, NpcScriptCommand};
 use crate::social_windows::{ChannelWindow, MegaphoneWindow, MemoWindow, MessengerWindow};
+use crate::physics::{Physics, PhysicsObject};
 use futures;
 
 /// Gameplay state for when the player is in the game world
@@ -207,8 +208,8 @@ impl GameplayState {
             Ok(map) => {
 
                 // Determine spawn position based on target portal or spawn point
-                let mut spawn_x;
-                let mut spawn_y;
+                let spawn_x;
+                let spawn_y;
 
                 // If we have a target portal name (entered through a portal), use that
                 // Otherwise, use the spawn portal (type 0)
@@ -734,7 +735,7 @@ impl GameplayState {
             for life in &map.life {
                 if life.life_type == "n" && !life.hide {
                     // Calculate NPC position (snapped to foothold if available)
-                    let mut npc_x = life.x as f32;
+                    let npc_x = life.x as f32;
                     let mut npc_y = life.y as f32;
 
                     if life.foothold != 0 {
@@ -1010,18 +1011,27 @@ impl GameplayState {
                         }
                     } else if self.player_vy >= 0.0 && !movement_blocked {
                         // Only check below if player is falling AND not blocked by a wall
-                        // This prevents auto-teleportation when hitting a wall
-                        if let Some((fh_y, _)) = map.find_foothold_below(self.player_x, self.player_y) {
-                            // Only snap if player is actually falling and close to the foothold
-                            // Don't snap if player is far above (prevents teleportation)
-                            if self.player_y >= fh_y - 5.0 {
-                                self.player_y = fh_y;
-                                self.player_vy = 0.0;
-                                self.on_ground = true;
+                        // This prevents auto-teleportation when hitting a wall or walking into step platforms
+                        // Only snap if player is actually falling (has downward velocity) and is close to a platform
+                        if self.player_vy > 0.0 {
+                            // Player is actively falling - check for platform below
+                            if let Some((fh_y, _)) = map.find_foothold_below(self.player_x, self.player_y) {
+                                // Only snap if player is very close to the foothold (within 10px)
+                                // This prevents teleportation to distant platforms
+                                let distance_to_platform = self.player_y - fh_y;
+                                if distance_to_platform >= -10.0 && distance_to_platform <= 5.0 {
+                                    self.player_y = fh_y;
+                                    self.player_vy = 0.0;
+                                    self.on_ground = true;
+                                } else {
+                                    self.on_ground = false;
+                                }
                             } else {
                                 self.on_ground = false;
                             }
                         } else {
+                            // Player has no downward velocity - don't snap to platforms
+                            // This prevents auto-latching when walking into step platforms
                             self.on_ground = false;
                         }
                     } else {
@@ -1042,21 +1052,35 @@ impl GameplayState {
         // No horizontal clamping - footholds naturally define walkable area
         // If you walk off a platform, you fall (and hit bottom boundary eventually)
 
-        // Bottom boundary - if player hits bottom, stop them and set on ground
+        // Map boundaries (from C++ FootholdTree: walls and borders)
+        // borders = { topb - 300, botb + 100 }
         let vr_top = map.info.vr_top as f32;
         let vr_bottom = map.info.vr_bottom as f32;
         
+        // Calculate actual boundaries from footholds (like C++ FootholdTree)
+        let mut topb: f32 = 30000.0;
+        let mut botb: f32 = -30000.0;
+        for fh in &map.footholds {
+            let t = fh.y1.min(fh.y2) as f32;
+            let b = fh.y1.max(fh.y2) as f32;
+            if t < topb { topb = t; }
+            if b > botb { botb = b; }
+        }
+        let border_top = topb - 300.0;
+        let border_bottom = botb + 100.0;
+        
+        // Top boundary - prevent going above map ceiling
+        if self.player_y < border_top {
+            self.player_y = border_top;
+            self.player_vy = 0.0;
+        }
+        
         // Bottom boundary - prevent falling through the bottom of the world
-        if self.player_y >= vr_bottom {
-            info!("Player Y ({}) >= VR_BOTTOM ({}), clamping to floor", self.player_y, vr_bottom);
-            self.player_y = vr_bottom;
+        if self.player_y >= border_bottom {
+            self.player_y = border_bottom;
             self.player_vy = 0.0;
             self.on_ground = true;
         }
-
-        // NOTE: VRTop is removed - it's a CAMERA boundary, not a player boundary
-        // Players should be free to jump/climb to any height allowed by footholds/ladders
-        // The camera is clamped to VRTop separately (see camera update code below)
 
         // Update bot AI
         self.bot_ai.update(clamped_dt, map);
@@ -1110,7 +1134,7 @@ impl GameplayState {
         for life in &map.life {
             if life.life_type == "n" && !life.hide {
                 // Calculate NPC position (snapped to foothold if available)
-                let mut npc_x = life.x as f32;
+                let npc_x = life.x as f32;
                 let mut npc_y = life.y as f32;
 
                 if life.foothold != 0 {
